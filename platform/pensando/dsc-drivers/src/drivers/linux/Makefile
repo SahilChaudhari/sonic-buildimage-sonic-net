@@ -40,6 +40,7 @@ KCFLAGS += -DCONFIG_MNET_UIO_PDRV_GENIRQ
 ALL = mnic
 ALL += mnet_uio_pdrv_genirq
 ALL += mdev
+ALL += ipc
 export PATH := $(PATH):$(TOOLCHAIN_DIR)/bin
 
 KSYMS_MNIC = $(KMOD_OUT_DIR)/Module.symvers.mnic
@@ -102,6 +103,13 @@ mdev:
 	#$(MAKE) -C $(KSRC) V=1 M=$(KMOD_SRC_DIR)/mdev KBUILD_OUTPUT=$(KMOD_OUT_DIR) $(KOPT)
 	$(MAKE) -C $(KSRC) V=1 M=$(KMOD_SRC_DIR)/mdev $(KOPT)
 
+IPC_SRC = $(CURDIR)/ipc
+IPC_KOPT = ARCH=arm64
+IPC_KOPT += CROSS_COMPILE=aarch64-linux-gnu-
+ipc:
+	@echo "===> Building IPC driver (tawk_ipc.ko)"
+	$(MAKE) -C $(KSRC) V=1 M=$(IPC_SRC) BUILD_PLATFORM=1 $(IPC_KOPT)
+
 eth: KOPT+=$(ETH_KOPT)
 eth:
 	@echo "===> Building ETH driver "
@@ -130,6 +138,6 @@ cscope:
 	find $(IONIC_ETH_SRC) -name '*.[ch]' > cscope.files
 	cscope -bkq
 
-.PHONY: default all mnic mdev mnet_uio_pdrv_genirq eth clean install modules_install cscope
+.PHONY: default all mnic mdev mnet_uio_pdrv_genirq ipc eth clean install modules_install cscope
 
 endif

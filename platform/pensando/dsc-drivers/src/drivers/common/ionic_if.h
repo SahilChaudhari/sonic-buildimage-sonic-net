@@ -19,10 +19,10 @@
 #define IONIC_SIZE_CHECK(type, N, X)		enum ionic_static_assert_enum_##X \
 		{ ionic_static_assert_##X = (N) / (sizeof(type X) == (N)) }
 #define IONIC_CHECK_CMD_LENGTH(X)		IONIC_SIZE_CHECK(struct, 64, X)
-#define IONIC_CHECK_COMP_LENGTH(X)  		IONIC_SIZE_CHECK(struct, 16, X)
-#define IONIC_CHECK_CMD_DATA_LENGTH(X)      	IONIC_SIZE_CHECK(union, 1912, X)
+#define IONIC_CHECK_COMP_LENGTH(X)		IONIC_SIZE_CHECK(struct, 16, X)
+#define IONIC_CHECK_CMD_DATA_LENGTH(X)		IONIC_SIZE_CHECK(union, 1912, X)
 #define IONIC_CHECK_OPROM_LENGTH(X)		IONIC_SIZE_CHECK(struct, 32, X)
-#define IONIC_CHECK_DEV_INFO_REGS_LENGTH(X)     IONIC_SIZE_CHECK(union, 2048, X)
+#define IONIC_CHECK_DEV_INFO_REGS_LENGTH(X)	IONIC_SIZE_CHECK(union, 2048, X)
 #endif
 
 /**
@@ -74,8 +74,19 @@ enum ionic_cmd_opcode {
 	IONIC_CMD_VF_SETATTR			= 61,
 	IONIC_CMD_VF_CTRL			= 62,
 
+	/* CMB command */
+	IONIC_CMD_DISCOVER_CMB			= 80,
+
+	IONIC_CMD_RESERVED_98			= 98,
+	IONIC_CMD_RESERVED_99			= 99,
+
 	/* UPT command */
 	IONIC_CMD_UPT_MESSAGE			= 100,
+
+	/* Special command implemented by custom firmware builds
+	 * for specific test cases; not implemented in the driver
+	 */
+	IONIC_CMD_FW_TEST			= 200,
 
 	/* UEFI HII commands */
 	IONIC_CMD_HII_IDENTIFY			= 235,
@@ -143,13 +154,12 @@ enum ionic_notifyq_opcode {
  * @vf_index:       VF Index.
  * @upt_cmd_data:   UPT specific command bytes
  */
-
 struct ionic_upt_cmd {
-       u8         opcode;
-       u8         rsvd;
-       __le16     vf_index;
-       u8         rsvd1[4];
-       u8         upt_cmd_data[56];
+	u8         opcode;
+	u8         rsvd;
+	__le16	   vf_index;
+	u8	   rsvd1[4];
+	u8         upt_cmd_data[56];
 };
 IONIC_CHECK_CMD_LENGTH(ionic_upt_cmd);
 
@@ -158,8 +168,8 @@ IONIC_CHECK_CMD_LENGTH(ionic_upt_cmd);
  * @status:     Status of the command (enum ionic_status_code)
  */
 struct ionic_upt_comp {
-       u8         status;
-       u8         rsvd[15];
+	u8         status;
+	u8         rsvd[15];
 };
 IONIC_CHECK_COMP_LENGTH(ionic_upt_comp);
 
@@ -205,6 +215,17 @@ static inline u8 color_match(u8 color, u8 done_color)
 struct ionic_nop_cmd {
 	u8 opcode;
 	u8 rsvd[63];
+};
+
+/**
+ * struct ionic_fw_test_cmd - custom commands implemented by firmware
+ * for use by specific tests. Not invoked by the driver.
+ * @test_op: identifies the type of test command.
+ */
+struct ionic_fw_test_cmd {
+	u8 opcode;
+	u8 test_op;
+	u8 rsvd[62];
 };
 
 /**
@@ -299,10 +320,10 @@ IONIC_SIZE_CHECK(struct, 64, ionic_dev_debug_stats);
 /**
  * struct ionic_dev_debug_cmd - Driver/device debug command
  * @opcode:	opcode
- * @type:	debug_type (enum ionic_debug_type)
+ * @debug_type:	debug_type (enum ionic_debug_type)
  * @stats:	Debug stats region properties
- * 		@count:		Number of (field, cnt) pairs
- * 		@stats_pa:	Physical address of the debug stats region
+ *	@stats.count:		Number of (field, cnt) pairs
+ *	@stats.stats_pa:	Physical address of the debug stats region
  */
 struct ionic_dev_debug_cmd {
 	u8 opcode;
@@ -362,9 +383,13 @@ union ionic_drv_identity {
 /**
  * enum ionic_dev_capability - Device capabilities
  * @IONIC_DEV_CAP_VF_CTRL:     Device supports VF ctrl operations
+ * @IONIC_DEV_CAP_DISC_CMB:    Device supports CMB discovery operations
+ * @IONIC_DEV_CAP_VF_VLAN_EXT: Device supports VF VLAN extended attributes
  */
 enum ionic_dev_capability {
 	IONIC_DEV_CAP_VF_CTRL        = BIT(0),
+	IONIC_DEV_CAP_DISC_CMB       = BIT(1),
+	IONIC_DEV_CAP_VF_VLAN_EXT    = BIT(2),
 };
 
 /**
@@ -485,6 +510,7 @@ enum ionic_logical_qtype {
  * @IONIC_Q_F_4X_DESC:      Quadruple main descriptor size
  * @IONIC_Q_F_4X_CQ_DESC:   Quadruple cq descriptor size
  * @IONIC_Q_F_4X_SG_DESC:   Quadruple sg descriptor size
+ * @IONIC_QIDENT_F_EXPDB:   Queue supports express doorbell
  */
 enum ionic_q_feature {
 	IONIC_QIDENT_F_CQ		= BIT_ULL(0),
@@ -497,6 +523,7 @@ enum ionic_q_feature {
 	IONIC_Q_F_4X_DESC		= BIT_ULL(7),
 	IONIC_Q_F_4X_CQ_DESC		= BIT_ULL(8),
 	IONIC_Q_F_4X_SG_DESC		= BIT_ULL(9),
+	IONIC_QIDENT_F_EXPDB		= BIT_ULL(10),
 };
 
 /**
@@ -522,7 +549,7 @@ enum ionic_txq_feature {
 };
 
 /**
- * struct ionic_hwstamp_bits - Hardware timestamp decoding bits
+ * enum ionic_hwstamp_bits - Hardware timestamp decoding bits
  * @IONIC_HWSTAMP_INVALID:          Invalid hardware timestamp value
  * @IONIC_HWSTAMP_CQ_NEGOFFSET:     Timestamp field negative offset
  *                                  from the base cq descriptor.
@@ -582,38 +609,53 @@ union ionic_lif_config {
 };
 
 /**
+ * enum ionic_lif_rdma_stats_type - LIF stat type
+ * @IONIC_LIF_RDMA_STAT_GLOBAL:     Global stats
+ * @IONIC_LIF_RDMA_STAT_QP:         Queue pair stats
+ */
+enum ionic_lif_rdma_cap_stats {
+	IONIC_LIF_RDMA_STAT_GLOBAL = BIT(0),
+	IONIC_LIF_RDMA_STAT_QP = BIT(1),
+};
+
+/**
  * struct ionic_lif_identity - LIF identity information (type-specific)
  *
  * @capabilities:        LIF capabilities
  *
  * @eth:                    Ethernet identify structure
- *     @version:            Ethernet identify structure version
- *     @max_ucast_filters:  Number of perfect unicast addresses supported
- *     @max_mcast_filters:  Number of perfect multicast addresses supported
- *     @min_frame_size:     Minimum size of frames to be sent
- *     @max_frame_size:     Maximum size of frames to be sent
- *     @hwstamp_tx_modes:   Bitmask of BIT_ULL(enum ionic_txstamp_mode)
- *     @hwstamp_rx_filters: Bitmask of enum ionic_pkt_class
- *     @config:             LIF config struct with features, mtu, mac, q counts
+ *	@eth.version:            Ethernet identify structure version
+ *	@eth.max_ucast_filters:  Number of perfect unicast addresses supported
+ *	@eth.max_mcast_filters:  Number of perfect multicast addresses supported
+ *	@eth.min_frame_size:     Minimum size of frames to be sent
+ *	@eth.max_frame_size:     Maximum size of frames to be sent
+ *	@eth.hwstamp_tx_modes:   Bitmask of BIT_ULL(enum ionic_txstamp_mode)
+ *	@eth.hwstamp_rx_filters: Bitmask of enum ionic_pkt_class
+ *	@eth.config:             LIF config struct with features, mtu, mac, q counts
  *
  * @rdma:                RDMA identify structure
- *     @version:         RDMA version of opcodes and queue descriptors
- *     @qp_opcodes:      Number of RDMA queue pair opcodes supported
- *     @admin_opcodes:   Number of RDMA admin opcodes supported
- *     @npts_per_lif:    Page table size per LIF
- *     @nmrs_per_lif:    Number of memory regions per LIF
- *     @nahs_per_lif:    Number of address handles per LIF
- *     @max_stride:      Max work request stride
- *     @cl_stride:       Cache line stride
- *     @pte_stride:      Page table entry stride
- *     @rrq_stride:      Remote RQ work request stride
- *     @rsq_stride:      Remote SQ work request stride
- *     @dcqcn_profiles:  Number of DCQCN profiles
- *     @aq_qtype:        RDMA Admin Qtype
- *     @sq_qtype:        RDMA Send Qtype
- *     @rq_qtype:        RDMA Receive Qtype
- *     @cq_qtype:        RDMA Completion Qtype
- *     @eq_qtype:        RDMA Event Qtype
+ *	@rdma.version:         RDMA capability version
+ *	@rdma.qp_opcodes:      Number of RDMA queue pair opcodes supported
+ *	@rdma.admin_opcodes:   Number of RDMA admin opcodes supported
+ *	@rdma.minor_version:   RDMA capability minor version
+ *	@rdma.npts_per_lif:    Page table size per LIF
+ *	@rdma.nmrs_per_lif:    Number of memory regions per LIF
+ *	@rdma.nahs_per_lif:    Number of address handles per LIF
+ *	@rdma.max_stride:      Max work request stride
+ *	@rdma.cl_stride:       Cache line stride
+ *	@rdma.pte_stride:      Page table entry stride
+ *	@rdma.rrq_stride:      Remote RQ work request stride
+ *	@rdma.rsq_stride:      Remote SQ work request stride
+ *	@rdma.dcqcn_profiles:  Number of DCQCN profiles
+ *	@rdma.puec_profiles:   Number of PUEC profiles
+ *	@rdma.page_size_cap:   Supported page sizes
+ *	@rdma.aq_qtype:        RDMA Admin Qtype
+ *	@rdma.sq_qtype:        RDMA Send Qtype
+ *	@rdma.rq_qtype:        RDMA Receive Qtype
+ *	@rdma.cq_qtype:        RDMA Completion Qtype
+ *	@rdma.eq_qtype:        RDMA Event Qtype
+ *	@rdma.srq_qtype:       RDMA Shared Receive Qtype
+ *	@rdma.stats_type:      Supported statistics type (enum ionic_lif_rdma_cap_stats)
  */
 union ionic_lif_identity {
 	struct {
@@ -638,7 +680,7 @@ union ionic_lif_identity {
 			u8 version;
 			u8 qp_opcodes;
 			u8 admin_opcodes;
-			u8 rsvd;
+			u8 minor_version;
 			__le32 npts_per_lif;
 			__le32 nmrs_per_lif;
 			__le32 nahs_per_lif;
@@ -648,12 +690,19 @@ union ionic_lif_identity {
 			u8 rrq_stride;
 			u8 rsq_stride;
 			u8 dcqcn_profiles;
-			u8 rsvd_dimensions[10];
+			u8 udma_shift;
+			u8 rsvd_dimensions;
+			__le64 page_size_cap;
 			struct ionic_lif_logical_qtype aq_qtype;
 			struct ionic_lif_logical_qtype sq_qtype;
 			struct ionic_lif_logical_qtype rq_qtype;
 			struct ionic_lif_logical_qtype cq_qtype;
 			struct ionic_lif_logical_qtype eq_qtype;
+			__le16 stats_type;
+			u8 puec_profiles;
+			u8 rcq_sign_bit;
+			struct ionic_lif_logical_qtype srq_qtype;
+			u8 rsvd1[148];
 		} __attribute__((packed)) rdma;
 	} __attribute__((packed));
 	__le32 words[478];
@@ -879,7 +928,7 @@ enum ionic_txq_desc_opcode {
  *                   IONIC_TXQ_DESC_OPCODE_CSUM_HW:
  *                      Offload 16-bit checksum computation to hardware.
  *                      If @csum_l3 is set then the packet's L3 checksum is
- *                      updated. Similarly, if @csum_l4 is set the the L4
+ *                      updated. Similarly, if @csum_l4 is set the L4
  *                      checksum is updated. If @encap is set then encap header
  *                      checksums are also updated.
  *
@@ -908,7 +957,7 @@ enum ionic_txq_desc_opcode {
  *                      will set CWR flag in the first segment if
  *                      CWR is set in the template header, and
  *                      clear CWR in remaining segments.
- * @flags:
+ *    flags:
  *                vlan:
  *                    Insert an L2 VLAN header using @vlan_tci
  *                encap:
@@ -921,9 +970,9 @@ enum ionic_txq_desc_opcode {
  *                    TSO start
  *                tso_eot:
  *                    TSO end
- * @num_sg_elems: Number of scatter-gather elements in SG
+ *    num_sg_elems: Number of scatter-gather elements in SG
  *                descriptor
- * @addr:         First data buffer's DMA address
+ *    addr:         First data buffer's DMA address
  *                (Subsequent data buffers are on txq_sg_desc)
  * @len:          First data buffer's length, in bytes
  * @vlan_tci:     VLAN tag to insert in the packet (if requested
@@ -1213,6 +1262,7 @@ enum ionic_eth_hw_features {
 	IONIC_ETH_HW_TX_CSUM_GENEVE	= BIT(18),
 	IONIC_ETH_HW_TSO_GENEVE		= BIT(19),
 	IONIC_ETH_HW_TIMESTAMP		= BIT(20),
+	IONIC_ETH_HW_RDMA_TIMESTAMP	= BIT(21),
 };
 
 /**
@@ -1336,7 +1386,10 @@ enum ionic_xcvr_pid {
 	IONIC_XCVR_PID_SFP_25GBASE_CR_S  = 3,
 	IONIC_XCVR_PID_SFP_25GBASE_CR_L  = 4,
 	IONIC_XCVR_PID_SFP_25GBASE_CR_N  = 5,
-
+	IONIC_XCVR_PID_QSFP_50G_CR2_FC   = 6,
+	IONIC_XCVR_PID_QSFP_50G_CR2      = 7,
+	IONIC_XCVR_PID_QSFP_200G_CR4     = 8,
+	IONIC_XCVR_PID_QSFP_400G_CR4     = 9,
 	/* Fiber */
 	IONIC_XCVR_PID_QSFP_100G_AOC    = 50,
 	IONIC_XCVR_PID_QSFP_100G_ACC    = 51,
@@ -1362,6 +1415,15 @@ enum ionic_xcvr_pid {
 	IONIC_XCVR_PID_SFP_25GBASE_ACC  = 71,
 	IONIC_XCVR_PID_SFP_10GBASE_T    = 72,
 	IONIC_XCVR_PID_SFP_1000BASE_T   = 73,
+	IONIC_XCVR_PID_QSFP_200G_AOC   = 74,
+	IONIC_XCVR_PID_QSFP_200G_FR4   = 75,
+	IONIC_XCVR_PID_QSFP_200G_DR4   = 76,
+	IONIC_XCVR_PID_QSFP_200G_SR4   = 77,
+	IONIC_XCVR_PID_QSFP_200G_ACC   = 78,
+	IONIC_XCVR_PID_QSFP_400G_FR4   = 79,
+	IONIC_XCVR_PID_QSFP_400G_DR4   = 80,
+	IONIC_XCVR_PID_QSFP_400G_SR4   = 81,
+	IONIC_XCVR_PID_QSFP_400G_VR4   = 82,
 };
 
 /**
@@ -1450,6 +1512,9 @@ struct ionic_xcvr_status {
  */
 union ionic_port_config {
 	struct {
+#define IONIC_SPEED_800G	800000	/* 800G in Mbps */
+#define IONIC_SPEED_400G	400000	/* 400G in Mbps */
+#define IONIC_SPEED_200G	200000	/* 200G in Mbps */
 #define IONIC_SPEED_100G	100000	/* 100G in Mbps */
 #define IONIC_SPEED_50G		50000	/* 50G in Mbps */
 #define IONIC_SPEED_40G		40000	/* 40G in Mbps */
@@ -1783,7 +1848,7 @@ struct ionic_dev_getattr_cmd {
 };
 
 /**
- * struct ionic_dev_setattr_comp - Device set attr command completion
+ * struct ionic_dev_getattr_comp - Device set attr command completion
  * @status:     Status of the command (enum ionic_status_code)
  * @features:   Device features
  * @color:      Color bit
@@ -1798,7 +1863,7 @@ struct ionic_dev_getattr_comp {
 	u8     color;
 };
 
-/**
+/*
  * RSS parameters
  */
 #define IONIC_RSS_HASH_KEY_SIZE		40
@@ -1822,6 +1887,7 @@ enum ionic_rss_hash_types {
  * @IONIC_LIF_ATTR_RSS:         LIF RSS attribute
  * @IONIC_LIF_ATTR_STATS_CTRL:  LIF statistics control attribute
  * @IONIC_LIF_ATTR_TXSTAMP:     LIF TX timestamping mode
+ * @IONIC_LIF_ATTR_MGMT_IPV4:   LIF internal mgmt ipv4 address
  */
 enum ionic_lif_attr {
 	IONIC_LIF_ATTR_STATE        = 0,
@@ -1832,6 +1898,8 @@ enum ionic_lif_attr {
 	IONIC_LIF_ATTR_RSS          = 5,
 	IONIC_LIF_ATTR_STATS_CTRL   = 6,
 	IONIC_LIF_ATTR_TXSTAMP      = 7,
+	IONIC_LIF_ATTR_MGMT_IPV4    = 254,
+	IONIC_LIF_ATTR_MAX          = 255,
 };
 
 /**
@@ -1845,11 +1913,12 @@ enum ionic_lif_attr {
  * @mac:        Station mac
  * @features:   Features (enum ionic_eth_hw_features)
  * @rss:        RSS properties
- *              @types:     The hash types to enable (see rss_hash_types)
- *              @key:       The hash secret key
- *              @addr:      Address for the indirection table shared memory
+ *	@rss.types:     The hash types to enable (see rss_hash_types)
+ *	@rss.key:       The hash secret key
+ *	@rss.addr:      Address for the indirection table shared memory
  * @stats_ctl:  stats control commands (enum ionic_stats_ctl_cmd)
- * @txstamp:    TX Timestamping Mode (enum ionic_txstamp_mode)
+ * @txstamp_mode:    TX Timestamping Mode (enum ionic_txstamp_mode)
+ * @mgmt_ipv4:  ip address to set on internal mgmt interface
  */
 struct ionic_lif_setattr_cmd {
 	u8     opcode;
@@ -1869,6 +1938,10 @@ struct ionic_lif_setattr_cmd {
 		} rss;
 		u8      stats_ctl;
 		__le16  txstamp_mode;
+		struct {
+			__be32 addr;
+			u8     subnet;
+		} mgmt_ipv4;
 		u8      rsvd[60];
 	} __attribute__((packed));
 };
@@ -1909,11 +1982,10 @@ struct ionic_lif_getattr_cmd {
  * @status:     Status of the command (enum ionic_status_code)
  * @comp_index: Index in the descriptor ring for which this is the completion
  * @state:      LIF state (enum ionic_lif_state)
- * @name:       The netdev name string, 0 terminated
  * @mtu:        Mtu
  * @mac:        Station mac
  * @features:   Features (enum ionic_eth_hw_features)
- * @txstamp:    TX Timestamping Mode (enum ionic_txstamp_mode)
+ * @txstamp_mode:    TX Timestamping Mode (enum ionic_txstamp_mode)
  * @color:      Color bit
  */
 struct ionic_lif_getattr_comp {
@@ -2002,12 +2074,12 @@ enum ionic_rx_filter_match_type {
  * @qid:        Queue ID
  * @match:      Rx filter match type (see IONIC_RX_FILTER_MATCH_xxx)
  * @vlan:       VLAN filter
- *              @vlan:  VLAN ID
+ *	@vlan.vlan:  VLAN ID
  * @mac:        MAC filter
- *              @addr:  MAC address (network-byte order)
+ *	@mac.addr:  MAC address (network-byte order)
  * @mac_vlan:   MACVLAN filter
- *              @vlan:  VLAN ID
- *              @addr:  MAC address (network-byte order)
+ *	@mac_vlan.vlan:  VLAN ID
+ *	@mac_vlan.addr:  MAC address (network-byte order)
  * @pkt_class:  Packet classification filter
  */
 struct ionic_rx_filter_add_cmd {
@@ -2072,6 +2144,7 @@ enum ionic_vf_attr {
 	IONIC_VF_ATTR_VLAN	= 5,
 	IONIC_VF_ATTR_RATE	= 6,
 	IONIC_VF_ATTR_STATSADDR	= 7,
+	IONIC_VF_ATTR_VLAN_EXT	= 8,
 };
 
 /**
@@ -2087,6 +2160,18 @@ enum ionic_vf_link_status {
 };
 
 /**
+ * struct ionic_vf_vlan_ext - Extended VLAN attributes for a VF
+ * @id:		vlan ID
+ * @proto:	vlan protocol/EtherType
+ * @qos:	vlan PCP
+ */
+struct ionic_vf_vlan_ext {
+	__le16 id;
+	__le16 proto;
+	u8 qos;
+};
+
+/**
  * struct ionic_vf_setattr_cmd - Set VF attributes on the NIC
  * @opcode:     Opcode
  * @attr:       Attribute type (enum ionic_vf_attr)
@@ -2098,6 +2183,7 @@ enum ionic_vf_link_status {
  *	@trust:		enable VF trust
  *	@linkstate:	set link up or down
  *	@stats_pa:	set DMA address for VF stats
+ *	@vlan_ext:	vlan, PCP, and QinQ proto
  */
 struct ionic_vf_setattr_cmd {
 	u8     opcode;
@@ -2111,6 +2197,7 @@ struct ionic_vf_setattr_cmd {
 		u8     trust;
 		u8     linkstate;
 		__le64 stats_pa;
+		struct ionic_vf_vlan_ext vlan_ext;
 		u8     pad[60];
 	} __attribute__((packed));
 };
@@ -2149,6 +2236,7 @@ struct ionic_vf_getattr_comp {
 		u8     trust;
 		u8     linkstate;
 		__le64 stats_pa;
+		struct ionic_vf_vlan_ext vlan_ext;
 		u8     pad[11];
 	} __attribute__((packed));
 	u8     color;
@@ -2156,14 +2244,14 @@ struct ionic_vf_getattr_comp {
 
 enum ionic_vf_ctrl_opcode {
 	IONIC_VF_CTRL_START_ALL	= 0,
-	IONIC_VF_CTRL_START 	= 1,
+	IONIC_VF_CTRL_START	= 1,
 };
 
 /**
- * struct ionic_vf_ctrl - VF control command
+ * struct ionic_vf_ctrl_cmd - VF control command
  * @opcode:         Opcode for the command
- * @vf_index:       VF Index. It is unused if op START_ALL is used.
  * @ctrl_opcode:    VF control operation type
+ * @vf_index:       VF Index. It is unused if op START_ALL is used.
  */
 
 struct ionic_vf_ctrl_cmd {
@@ -2183,6 +2271,82 @@ struct ionic_vf_ctrl_comp {
 	u8      rsvd[15];
 };
 IONIC_CHECK_COMP_LENGTH(ionic_vf_ctrl_comp);
+
+/**
+ * struct ionic_discover_cmb_cmd - CMB discovery command
+ * @opcode: Opcode for the command
+ * @rsvd:   Reserved bytes
+ */
+struct ionic_discover_cmb_cmd {
+	u8	opcode;
+	u8	rsvd[63];
+};
+
+IONIC_CHECK_CMD_LENGTH(ionic_discover_cmb_cmd);
+
+/**
+ * struct ionic_discover_cmb_comp - CMB discover command completion.
+ * @status: Status of the command (enum ionic_status_code)
+ * @rsvd:   Reserved bytes
+ */
+struct ionic_discover_cmb_comp {
+	u8	status;
+	u8	rsvd[15];
+};
+
+IONIC_CHECK_COMP_LENGTH(ionic_discover_cmb_comp);
+
+#define IONIC_MAX_CMB_REGIONS	16
+#define IONIC_CMB_REGION_64KB_SHIFT	16
+
+enum ionic_cmb_type {
+	IONIC_CMB_TYPE_DEVMEM	= 0,
+	IONIC_CMB_TYPE_EXPDB64	= 1,
+	IONIC_CMB_TYPE_EXPDB128	= 2,
+	IONIC_CMB_TYPE_EXPDB256	= 3,
+	IONIC_CMB_TYPE_EXPDB512	= 4,
+};
+
+/**
+ * union ionic_cmb_region - Configuration for CMB region
+ * @bar_num:		CMB mapping number from FW
+ * @cmb_type:		Type of CMB this region describes (enum ionic_cmb_type)
+ * @rsvd:		Reserved
+ * @offset:		Offset within BAR in 64KB pages
+ * @length:		Length of the CMB region
+ * @words:		32-bit words for direct access to the entire region
+ */
+union ionic_cmb_region {
+	struct {
+		u8	bar_num;
+		u8	cmb_type;
+		u8	rsvd[6];
+		__le32	offset;
+		__le32	length;
+	} __packed;
+	__le32  words[4];
+};
+
+/**
+ * union ionic_discover_cmb_identity - CMB layout identity structure
+ * @num_regions:	Number of CMB regions, up to 16
+ * @flags:		Feature and capability bits (0 for express doorbell, 1 for 4K
+ *			alignment indicator, 31-24 for version information
+ * @config:		CMB mappings config, entry 0 for regular mapping, entries 1-7
+ *			for WQE sizes 64, 128, 256, 512, 1024, 2048 and 4096 bytes
+ * @words		Full union buffer size
+ */
+union ionic_discover_cmb_identity {
+	struct {
+		__le32 num_regions;
+#define IONIC_CMB_FLAG_EXPDB	BIT(0)
+#define IONIC_CMB_FLAG_4KALIGN	BIT(1)
+#define IONIC_CMB_FLAG_VERSION	0xff000000
+		__le32 flags;
+		union ionic_cmb_region region[IONIC_MAX_CMB_REGIONS];
+	};
+	__le32 words[478];
+};
 
 /**
  * struct ionic_qos_identify_cmd - QoS identify command
@@ -2318,7 +2482,6 @@ union ionic_qos_config {
  * union ionic_qos_identity - QoS identity structure
  * @version:	Version of the identify structure
  * @type:	QoS system type
- * @nclasses:	Number of usable QoS classes
  * @config:	Current configuration of classes
  */
 union ionic_qos_identity {
@@ -2359,7 +2522,7 @@ struct ionic_qos_reset_cmd {
 };
 
 /**
- * struct ionic_qos_clear_port_stats_cmd - Qos config reset command
+ * struct ionic_qos_clear_stats_cmd - Qos config reset command
  * @opcode:	Opcode
  */
 struct ionic_qos_clear_stats_cmd {
@@ -2390,8 +2553,8 @@ typedef struct ionic_admin_comp ionic_fw_download_comp;
 /**
  * enum ionic_fw_control_oper - FW control operations
  * @IONIC_FW_RESET:		Reset firmware
- * @IONIC_FW_INSTALL:   	Install firmware
- * @IONIC_FW_ACTIVATE:  	Activate firmware
+ * @IONIC_FW_INSTALL:		Install firmware
+ * @IONIC_FW_ACTIVATE:		Activate firmware
  * @IONIC_FW_INSTALL_ASYNC:	Install firmware asynchronously
  * @IONIC_FW_INSTALL_STATUS:	Firmware installation status
  * @IONIC_FW_ACTIVATE_ASYNC:	Activate firmware asynchronously
@@ -2410,10 +2573,10 @@ enum ionic_fw_control_oper {
 };
 
 enum ionic_fw_slot {
-    IONIC_FW_SLOT_INVALID   = 0,
-    IONIC_FW_SLOT_A         = 1,
-    IONIC_FW_SLOT_B         = 2,
-    IONIC_FW_SLOT_GOLD      = 3,
+	IONIC_FW_SLOT_INVALID   = 0,
+	IONIC_FW_SLOT_A         = 1,
+	IONIC_FW_SLOT_B         = 2,
+	IONIC_FW_SLOT_GOLD      = 3,
 };
 
 /**
@@ -2549,21 +2712,21 @@ enum ionic_hii_capabilities {
 
 /**
  * union ionic_hii_dev_identity - HII identity information
- * @ver:    		HII Identify version
- * @oob_en:    		Enable out of band management
+ * @ver:		HII Identify version
+ * @oob_en:		Enable out of band management
  * @uid_led_on:		Turn on the UID led
- * @vlan_en:   		Enable pxe vlan
+ * @vlan_en:		Enable pxe vlan
  * @vlan:		Vlan id used for pxe
  * @capabilities:	Bitmap of capabilities supported by nic
  */
 union ionic_hii_dev_identity {
 	struct {
 		u8	ver;
-		u8     	oob_en;
-		u8     	uid_led_on;
-		u8     	vlan_en;
-		__le16 	vlan;
-		__le32 	capabilities;
+		u8	oob_en;
+		u8	uid_led_on;
+		u8	vlan_en;
+		__le16	vlan;
+		__le32	capabilities;
 	};
 	__le32 words[478];
 };
@@ -2591,7 +2754,7 @@ IONIC_CHECK_CMD_LENGTH(ionic_hii_init_cmd);
 
 /**
  * struct ionic_hii_init_comp - HII initialization command completion
- * @status: 	Status of the command (enum ionic_status_code)
+ * @status:	Status of the command (enum ionic_status_code)
  */
 struct ionic_hii_init_comp {
 	u8 status;
@@ -2602,9 +2765,9 @@ IONIC_CHECK_COMP_LENGTH(ionic_hii_init_comp);
 
 /**
  * enum ionic_hii_attr - List of HII attributes
- * @IONIC_HII_ATTR_OOB_EN:      HII OOB enable atrribute
- * @IONIC_HII_ATTR_UID_LED:   	HII set UID led atrribute
- * @IONIC_HII_ATTR_VLAN:        HII PXE vlan atrribute
+ * @IONIC_HII_ATTR_OOB_EN:      HII OOB enable attribute
+ * @IONIC_HII_ATTR_UID_LED:	HII set UID led attribute
+ * @IONIC_HII_ATTR_VLAN:        HII PXE vlan attribute
  */
 enum ionic_hii_attr {
 	IONIC_HII_ATTR_OOB_EN	= 0,
@@ -2619,8 +2782,8 @@ enum ionic_hii_attr {
  * @oob_en:         Enable out of band management
  * @uid_led_on:    Turn on the UID led
  * @vlan:           VLAN attributes
- *                  @enable:    Enable pxe vlan
- *                  @id:        Pxe vlan id
+ *        @vlan.enable:    Enable pxe vlan
+ *        @vlan.id:        Pxe vlan id
  */
 struct ionic_hii_setattr_cmd {
 	u8     opcode;
@@ -2669,10 +2832,10 @@ IONIC_CHECK_CMD_LENGTH(ionic_hii_getattr_cmd);
  * struct ionic_hii_getattr_comp - Hii get attr command completion
  * @status:         Status of the command (enum ionic_status_code)
  * @oob_en:         Enable out of band management
- * @uid_led_on:    Turn on the UID led
+ * @uid_led_on:     Turn on the UID led
  * @vlan:           VLAN attributes:
- *                  @enable:    Enable pxe vlan
- *                  @id:        Pxe vlan id
+ *	@vlan.enable:    Enable pxe vlan
+ *	@vlan.id:        Pxe vlan id
  * @color:          Color bit
  */
 struct ionic_hii_getattr_comp {
@@ -2964,7 +3127,7 @@ enum ionic_oflow_drop_stats {
 };
 
 /**
- * struct port_pb_stats - packet buffers system stats
+ * struct ionic_port_pb_stats - packet buffers system stats
  * uses ionic_pb_buffer_drop_stats for drop_counts[]
  */
 struct ionic_port_pb_stats {
@@ -3048,7 +3211,11 @@ union ionic_port_identity {
  * @status:          Port status data
  * @stats:           Port statistics data
  * @mgmt_stats:      Port management statistics data
- * @port_pb_drop_stats:   uplink pb drop stats
+ * @sprom_epage:     Extended Transceiver sprom
+ * @sprom_page1:     Extended Transceiver sprom, page 1
+ * @sprom_page2:     Extended Transceiver sprom, page 2
+ * @sprom_page3:     Extended Transceiver sprom, page 0x11 channel info
+ * @pb_stats:        uplink pb drop stats
  */
 struct ionic_port_info {
 	union ionic_port_config config;
@@ -3057,8 +3224,17 @@ struct ionic_port_info {
 		struct ionic_port_stats      stats;
 		struct ionic_mgmt_port_stats mgmt_stats;
 	};
-	/* room for pb_stats to start at 2k offset */
-	u8                          rsvd[760];
+	union {
+		u8     sprom_epage[384];
+		struct {
+			u8 sprom_page1[128];
+			u8 sprom_page2[128];
+			u8 sprom_page17[128];
+		};
+	};
+	u8     rsvd[376];
+
+	/* pb_stats must start at 2k offset */
 	struct ionic_port_pb_stats  pb_stats;
 };
 
@@ -3168,14 +3344,14 @@ struct ionic_lif_stats {
 	__le64 rsvd40;
 	__le64 rsvd41;
 
-	__le64 rsvd42;
-	__le64 rsvd43;
-	__le64 rsvd44;
-	__le64 rsvd45;
-	__le64 rsvd46;
-	__le64 rsvd47;
-	__le64 rsvd48;
-	__le64 rsvd49;
+	__le64 tx_pkts;
+	__le64 tx_bytes;
+	__le64 rx_pkts;
+	__le64 rx_bytes;
+	__le64 tx_pps;
+	__le64 tx_bps;
+	__le64 rx_pps;
+	__le64 rx_bps;
 
 	/* RDMA/ROCE REQ Error/Debugs (768 - 895) */
 	__le64 rdma_req_rx_pkt_seq_err;
@@ -3250,6 +3426,8 @@ union ionic_dev_cmd {
 	struct ionic_vf_getattr_cmd vf_getattr;
 	struct ionic_vf_ctrl_cmd vf_ctrl;
 
+	struct ionic_discover_cmb_cmd discover_cmb;
+
 	struct ionic_lif_identify_cmd lif_identify;
 	struct ionic_lif_init_cmd lif_init;
 	struct ionic_lif_reset_cmd lif_reset;
@@ -3298,6 +3476,8 @@ union ionic_dev_cmd_comp {
 	struct ionic_vf_getattr_comp vf_getattr;
 	struct ionic_vf_ctrl_comp vf_ctrl;
 
+	struct ionic_discover_cmb_comp discover_cmb;
+
 	struct ionic_lif_identify_comp lif_identify;
 	struct ionic_lif_init_comp lif_init;
 	ionic_lif_reset_comp lif_reset;
@@ -3321,12 +3501,12 @@ union ionic_dev_cmd_comp {
 	struct ionic_upt_comp upt_comp;
 };
 
+#define IONIC_DEVINFO_OPROM_RESERVED   31
 /**
  * struct ionic_oprom_regs - Oprom debug/enable and bmp registers
  * @oprom_log_level: Variables indicates whether Oprom log to be printed or not
  * @oprom_reserved : Reserved for future use and make it as 32 byte alignment of oprom_regs.
  */
-#define IONIC_DEVINFO_OPROM_RESERVED   31
 struct ionic_oprom_regs {
 	u8    oprom_log_level;
 	u8    oprom_reserved[IONIC_DEVINFO_OPROM_RESERVED];
@@ -3356,7 +3536,8 @@ struct ionic_hwstamp_regs {
  * @serial_num:      Serial number
  * @fw_version:      Firmware version
  * @oprom_regs:      oprom_regs to store oprom debug enable/disable and bmp
- * @hwstamp_regs:    Hardware current timestamp registers
+ * @int_mnic_ip:     Int mnic ip address 169.254.<port>.1, byte 3 is 169
+ * @hwstamp:         Hardware current timestamp registers
  */
 union ionic_dev_info_regs {
 #define IONIC_DEVINFO_FWVERS_BUFLEN 32
@@ -3373,7 +3554,8 @@ union ionic_dev_info_regs {
 		char   fw_version[IONIC_DEVINFO_FWVERS_BUFLEN];
 		char   serial_num[IONIC_DEVINFO_SERIAL_BUFLEN];
 		struct ionic_oprom_regs oprom_regs;
-		u8     rsvd_pad1024[916];
+		u8     int_mnic_ip[4];
+		u8     rsvd_pad1024[912];
 		struct ionic_hwstamp_regs hwstamp;
 	};
 	u32 words[512];
@@ -3459,9 +3641,14 @@ union ionic_adminq_comp {
 #define IONIC_BAR0_DEV_CMD_DATA_REGS_OFFSET	0x0c00
 #define IONIC_BAR0_INTR_STATUS_OFFSET		0x1000
 #define IONIC_BAR0_INTR_CTRL_OFFSET		0x2000
+
 #define IONIC_DEV_CMD_DONE			0x00000001
 
-#define IONIC_ASIC_TYPE_CAPRI			0
+#define IONIC_ASIC_TYPE_NONE			0
+#define IONIC_ASIC_TYPE_CAPRI			1
+#define IONIC_ASIC_TYPE_ELBA			2
+#define IONIC_ASIC_TYPE_GIGLIO			3
+#define IONIC_ASIC_TYPE_SALINA			4
 
 /**
  * struct ionic_doorbell - Doorbell register layout
@@ -3622,6 +3809,7 @@ struct ionic_identity {
 	union ionic_port_identity port;
 	union ionic_qos_identity qos;
 	union ionic_q_identity txq;
+	union ionic_discover_cmb_identity cmb_layout;
 };
 
 #endif /* _IONIC_IF_H_ */

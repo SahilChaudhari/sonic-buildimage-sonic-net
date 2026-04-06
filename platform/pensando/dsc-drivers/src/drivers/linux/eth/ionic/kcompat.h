@@ -4,6 +4,7 @@
 #ifndef _KCOMPAT_H_
 #define _KCOMPAT_H_
 
+#include "autocompat.h"
 #ifndef LINUX_VERSION_CODE
 #include <linux/version.h>
 #else
@@ -900,6 +901,9 @@ struct _kc_ethtool_pauseparam {
         SLE_LOCALVERSION_CODE < KERNEL_VERSION(96,0,0))))
 /* SLES12 SP4 GM is 4.12.14-94.41 and update kernel is 4.12.14-95.x. */
 #define SLE_VERSION_CODE SLE_VERSION(12,4,0)
+#elif (LINUX_VERSION_CODE == KERNEL_VERSION(4,12,14) && \
+       (SLE_LOCALVERSION_CODE == KERNEL_VERSION(115,0,0)))
+#define SLE_VERSION_CODE SLE_VERSION(12,5,0)
 #elif (LINUX_VERSION_CODE == KERNEL_VERSION(4,12,14) && \
        (SLE_LOCALVERSION_CODE == KERNEL_VERSION(23,0,0) || \
         SLE_LOCALVERSION_CODE == KERNEL_VERSION(2,0,0) || \
@@ -5472,12 +5476,7 @@ static inline struct sk_buff *__kc_napi_alloc_skb(struct napi_struct *napi, unsi
 #define __napi_alloc_skb(napi,len,mask) __kc_napi_alloc_skb(napi,len)
 #endif /* SKB_ALLOC_NAPI */
 #define HAVE_CONFIG_PM_RUNTIME
-#if (RHEL_RELEASE_CODE && (RHEL_RELEASE_CODE > RHEL_RELEASE_VERSION(6,7)) && \
-     (RHEL_RELEASE_CODE < RHEL_RELEASE_VERSION(7,0)))
-#define HAVE_RXFH_HASHFUNC
-#endif /* 6.7 < RHEL < 7.0 */
 #if RHEL_RELEASE_CODE && (RHEL_RELEASE_CODE > RHEL_RELEASE_VERSION(7,1))
-#define HAVE_RXFH_HASHFUNC
 #define NDO_DFLT_BRIDGE_GETLINK_HAS_BRFLAGS
 #endif /* RHEL > 7.1 */
 #ifndef napi_schedule_irqoff
@@ -6535,6 +6534,32 @@ static inline bool __kc_napi_if_scheduled_mark_missed(struct napi_struct *n)
 #define napi_if_scheduled_mark_missed __kc_napi_if_scheduled_mark_missed
 #endif /* !napi_if_scheduled_mark_missed */
 #endif /* HAVE_AF_XDP_SUPPORT */
+#if (!RHEL_RELEASE_CODE && !SLE_VERSION_CODE || \
+     (RHEL_RELEASE_CODE && \
+      ((RHEL_RELEASE_CODE < RHEL_RELEASE_VERSION(7,7)) || \
+       (RHEL_RELEASE_CODE == RHEL_RELEASE_VERSION(8,0)))) || \
+     (SLE_VERSION_CODE && \
+      (SLE_LOCALVERSION_CODE < SLE_LOCALVERSION(115,0,0))))
+/* Variant of netdev_tx_sent_queue() for drivers that are aware
+ * that they should not test BQL status themselves.
+ * We do want to change __QUEUE_STATE_STACK_XOFF only for the last
+ * skb of a batch.
+ * Returns true if the doorbell must be used to kick the NIC.
+ */
+static inline bool __netdev_tx_sent_queue(struct netdev_queue *dev_queue,
+					  unsigned int bytes,
+					  bool xmit_more)
+{
+	if (xmit_more) {
+#ifdef CONFIG_BQL
+		dql_queued(&dev_queue->dql, bytes);
+#endif
+		return netif_tx_queue_stopped(dev_queue);
+	}
+	netdev_tx_sent_queue(dev_queue, bytes);
+	return true;
+}
+#endif /* (!RHEL && !SLES) || (RHEL < 7.7 || RHEL == 8.0) || (SLES <= 12.5-115) */
 #if (RHEL_RELEASE_CODE && (RHEL_RELEASE_CODE >= RHEL_RELEASE_VERSION(8,0)))
 #define HAVE_DEVLINK_ESWITCH_OPS_EXTACK
 #endif /* RHEL >= 8.0 */
@@ -6736,6 +6761,8 @@ static inline void devlink_flash_update_end_notify(struct devlink *dl) { }
 
 #else
 #define HAVE_DEVLINK_PREFETCH_FW
+#define HAVE_ETHTOOL_200G_BITS
+#define HAVE_ETHTOOL_400G_BITS
 static inline void devlink_flash_update_begin_notify(struct devlink *dl) { }
 static inline void devlink_flash_update_end_notify(struct devlink *dl) { }
 #endif /* 5.11.0 */
@@ -6760,18 +6787,8 @@ void _kc_ethtool_sprintf(u8 **data, const char *fmt, ...);
 #endif /* 5.13.0 */
 
 /*****************************************************************************/
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(5,15,0))
-#if (!RHEL_RELEASE_CODE || (RHEL_RELEASE_CODE && \
-       (RHEL_RELEASE_CODE < RHEL_RELEASE_VERSION(9,0))))
-
-#if (RHEL_RELEASE_CODE && (RHEL_RELEASE_VERSION(8, 6) <= RHEL_RELEASE_CODE))
-#define HAVE_COALESCE_EXTACK
-#endif
-
-#define ndo_eth_ioctl ndo_do_ioctl
-
 #if IS_ENABLED(CONFIG_NET_DEVLINK)
-#if !RHEL_RELEASE_CODE || (RHEL_RELEASE_VERSION(8, 7) > RHEL_RELEASE_CODE)
+#ifndef IONIC_HAVE_DEVLINK_ALLOC_DEV
 static inline struct devlink *_kc_devlink_alloc(const struct devlink_ops *ops,
 						size_t priv_size,
 						struct device *dev)
@@ -6779,30 +6796,13 @@ static inline struct devlink *_kc_devlink_alloc(const struct devlink_ops *ops,
 	return devlink_alloc(ops, priv_size);
 }
 #define devlink_alloc  _kc_devlink_alloc
-#else
-#define HAVE_VOID_DEVLINK_REGISTER
 #endif
 #endif /* CONFIG_NET_DEVLINK */
 
-#else
+/*****************************************************************************/
+#if (KERNEL_VERSION(5, 15, 0) <= LINUX_VERSION_CODE)
 
-#if RHEL_RELEASE_CODE && RHEL_RELEASE_VERSION(9, 0) < RHEL_RELEASE_CODE
-#define HAVE_COALESCE_EXTACK
-#endif
-
-#if IS_ENABLED(CONFIG_NET_DEVLINK)
-#define HAVE_VOID_DEVLINK_REGISTER
-#endif /* CONFIG_NET_DEVLINK */
-
-#endif /* not RH or RH < 9.0 */
-
-#else
-
-#define HAVE_COALESCE_EXTACK
-
-#if IS_ENABLED(CONFIG_NET_DEVLINK)
-#define HAVE_VOID_DEVLINK_REGISTER
-#endif /* CONFIG_NET_DEVLINK */
+#define	HAVE_NDO_SIOCDEVPRIVATE
 
 #endif /* 5.15.0 */
 
@@ -6811,36 +6811,54 @@ static inline struct devlink *_kc_devlink_alloc(const struct devlink_ops *ops,
 
 #if (RHEL_RELEASE_CODE && (RHEL_RELEASE_VERSION(8, 7) <= RHEL_RELEASE_CODE && \
 			   RHEL_RELEASE_VERSION(9, 0) != RHEL_RELEASE_CODE))
-#define HAVE_RINGPARAM_EXTACK
+#else
+#define txq_trans_cond_update txq_trans_update
 #endif
 
+#define MSI_INDEX(desc)			desc->platform.msi_index
+#define MSI_FOR_EACH_DESC(desc, dev)	for_each_msi_entry((desc), dev)
+
 #else
-#define HAVE_RINGPARAM_EXTACK
+#define MSI_INDEX(desc)			desc->msi_index
+#define MSI_FOR_EACH_DESC(desc, dev)	msi_for_each_desc((desc), dev, MSI_DESC_ALL)
 #endif /* 5.17 */
+
+#ifndef PCI_ERROR_RESPONSE
+#define PCI_ERROR_RESPONSE		(~0ULL)
+#define PCI_SET_ERROR_RESPONSE(val)	(*(val) = ((typeof(*(val)))PCI_ERROR_RESPONSE))
+#define PCI_POSSIBLE_ERROR(val)		((val) == ((typeof(val))PCI_ERROR_RESPONSE))
+#endif
 
 /*****************************************************************************/
 #if (KERNEL_VERSION(5, 18, 0) > LINUX_VERSION_CODE)
 #define vcalloc(a, b)	vzalloc((a) * (b))
+
+#if (RHEL_RELEASE_CODE && (RHEL_RELEASE_VERSION(8, 5) <= RHEL_RELEASE_CODE))
+#define HAVE_NET_XDP
+#endif
+
+#if (RHEL_RELEASE_CODE && (RHEL_RELEASE_VERSION(9, 2) <= RHEL_RELEASE_CODE))
+#define HAVE_NET_XDP_FRAGS
+#endif /* RHEL 9.2 */
+#else
+#define HAVE_NET_XDP
+#define HAVE_NET_XDP_FRAGS
+
 #endif /* 5.18 */
 
 /*****************************************************************************/
-#if (KERNEL_VERSION(6, 0, 0) > LINUX_VERSION_CODE && \
-	(!RHEL_RELEASE_CODE || \
-	  RHEL_RELEASE_CODE < RHEL_RELEASE_VERSION(8, 8) || \
-	 (RHEL_RELEASE_CODE >= RHEL_RELEASE_VERSION(9, 0) && RHEL_RELEASE_CODE < RHEL_RELEASE_VERSION(9, 2))))
+#ifndef IONIC_HAVE_TCP_ALL_HEADERS
 static inline int skb_tcp_all_headers(const struct sk_buff *skb)
 {
 	return skb_transport_offset(skb) + tcp_hdrlen(skb);
 }
-
+#endif
+#ifndef IONIC_HAVE_INNER_TCP_ALL_HEADERS
 static inline int skb_inner_tcp_all_headers(const struct sk_buff *skb)
 {
 	return skb_inner_transport_offset(skb) + inner_tcp_hdrlen(skb);
 }
-
-#else
-#endif /* 6.0 */
-
+#endif
 /*****************************************************************************/
 #if (KERNEL_VERSION(6, 1, 0) > LINUX_VERSION_CODE && \
 	(!RHEL_RELEASE_CODE || \
@@ -6858,20 +6876,51 @@ static inline int skb_inner_tcp_all_headers(const struct sk_buff *skb)
 #endif /* 6.1 */
 
 /*****************************************************************************/
-#if (KERNEL_VERSION(6, 2, 0) > LINUX_VERSION_CODE && \
-	(!RHEL_RELEASE_CODE || \
-	  RHEL_RELEASE_CODE <= RHEL_RELEASE_VERSION(9, 2)))
+#ifndef IONIC_HAVE_SET_NETDEV_DEVLINK_PORT
 #define SET_NETDEV_DEVLINK_PORT(dev, port)   devlink_port_type_eth_set(port, dev)
-#else
+#endif
+
+#ifndef IONIC_HAVE_DEVLINK_DRIVER_NAME_PUT
 #define devlink_info_driver_name_put(x, y)  0
-#endif /* 6.2 */
+#endif
+
+#if IS_ENABLED(CONFIG_NET_DEVLINK)
+#ifndef IONIC_HAVE_VOID_DEVLINK_REGISTER
+#ifndef IONIC_HAVE_DEVLINK_REGISTER_WITH_DEV
+static inline int _kc_devlink_register(struct devlink *devlink, struct device *dev) {
+	return devlink_register(devlink);
+}
+
+#define devlink_register _kc_devlink_register
+#endif
+#endif
+#endif
 
 /*****************************************************************************/
 #if (KERNEL_VERSION(6, 3, 0) > LINUX_VERSION_CODE)
+#if (RHEL_RELEASE_CODE && RHEL_RELEASE_VERSION(9, 2) < RHEL_RELEASE_CODE)
+#define devlink_param_driverinit_value_set	devl_param_driverinit_value_set
+#endif
 #else
 #define HAVE_RX_PUSH
+#define devlink_param_driverinit_value_set	devl_param_driverinit_value_set
 #endif /* 6.3 */
 
+/*****************************************************************************/
+#ifndef IONIC_HAVE_SKB_FRAG_FILL_PD
+#ifdef HAVE_NET_XDP_FRAGS
+static inline void skb_frag_fill_page_desc(skb_frag_t *frag,
+					   struct page *page,
+					   int off, int size)
+{
+	frag->bv_page = page;
+	frag->bv_offset = off;
+	skb_frag_size_set(frag, size);
+}
+#endif /* HAVE_NET_XDP_FRAGS */
+#endif /* IONIC_HAVE_SKB_FRAG_FILL_PD */
+
+/*****************************************************************************/
 /* We don't support PTP on older RHEL kernels (needs more compat work) */
 #if (RHEL_RELEASE_CODE && RHEL_RELEASE_CODE < RHEL_RELEASE_VERSION(7,4))
 #undef CONFIG_PTP_1588_CLOCK
@@ -6882,6 +6931,40 @@ static inline int skb_inner_tcp_all_headers(const struct sk_buff *skb)
 #ifdef CONFIG_SUSE_KERNEL
 #undef CONFIG_PTP_1588_CLOCK
 #undef CONFIG_PTP_1588_CLOCK_MODULE
+#endif
+
+#ifndef fallthrough
+# define fallthrough                    do {} while (0)  /* fallthrough */
+#endif
+
+/*****************************************************************************/
+#if (KERNEL_VERSION(6, 13, 0) <= LINUX_VERSION_CODE)
+#define HAVE_IMPORT_NS_STRING
+#endif /* 6.13.0 */
+
+#ifndef IONIC_HAVE_TIMER_DELETE
+#define timer_delete_sync del_timer_sync
+#endif
+
+#ifndef IONIC_HAVE_SMP_STORE_MB
+#define smp_store_mb(p, v) do { ACCESS_ONCE(p) = v;  mb(); } while(0)
+#endif
+
+#ifndef IONIC_HAVE_TIMER_CONTAINER_OF
+#define timer_container_of from_timer
+#endif
+
+#ifndef IONIC_HAVE_DMA_MAPPING_ERROR
+#define DMA_MAPPING_ERROR	(~(dma_addr_t)0)
+#endif
+
+#ifndef IONIC_HAVE_NDO_ETH_IOCTL
+#define	ndo_eth_ioctl ndo_do_ioctl
+#endif
+
+#if defined(IONIC_HAVE_EXT_NDO_VF_VLAN_PROTO) && \
+	!defined(IONIC_HAVE_NDO_VF_VLAN_PROTO)
+#define IONIC_HAVE_NDO_VF_VLAN_PROTO	1
 #endif
 
 #endif /* _KCOMPAT_H_ */

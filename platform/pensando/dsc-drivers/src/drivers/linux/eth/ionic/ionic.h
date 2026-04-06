@@ -32,7 +32,7 @@ struct ionic_lif;
 #define SCALED_PPM		(1000000ull << 16)  /* 2^16 million parts per 2^16 million */
 
 extern bool port_init_up;
-extern unsigned int rx_copybreak;
+extern unsigned short rx_copybreak;
 extern unsigned int rx_fill_threshold;
 extern unsigned int tx_budget;
 extern unsigned int devcmd_timeout;
@@ -43,6 +43,8 @@ struct ionic_vf {
 	u8	 macaddr[6];
 	__le32	 maxrate;
 	__le16	 vlanid;
+	__le16	 vlanproto;
+	u8	 qos;
 	u8	 spoofchk;
 	u8	 trusted;
 	u8	 linkstate;
@@ -59,8 +61,9 @@ struct ionic {
 	struct dentry *dentry;
 	struct ionic_dev_bar bars[IONIC_BARS_MAX];
 	unsigned int num_bars;
-	struct ionic_identity ident;
 	bool is_mgmt_nic;
+	struct ionic_identity ident;
+	struct workqueue_struct *wq;
 	struct ionic_lif *lif;
 	unsigned int nnqs_per_lif;
 	unsigned int nrdma_eqs_per_lif;
@@ -72,7 +75,8 @@ struct ionic {
 #ifndef HAVE_PCI_IRQ_API
 	struct msix_entry *msix;
 #endif
-	struct work_struct nb_work;
+	cpumask_var_t *affinity_masks;
+	struct delayed_work doorbell_check_dwork;
 	struct notifier_block nb;
 #ifdef IONIC_DEVLINK
 	struct devlink_port dl_port;
@@ -82,6 +86,8 @@ struct ionic {
 	int num_vfs;
 	struct timer_list watchdog_timer;
 	int watchdog_period;
+
+	char mnet_netdev_name[IFNAMSIZ];
 };
 
 int ionic_adminq_post(struct ionic_lif *lif, struct ionic_admin_ctx *ctx);
@@ -91,6 +97,8 @@ int ionic_adminq_post_wait(struct ionic_lif *lif, struct ionic_admin_ctx *ctx);
 int ionic_adminq_post_wait_nomsg(struct ionic_lif *lif, struct ionic_admin_ctx *ctx);
 void ionic_adminq_netdev_err_print(struct ionic_lif *lif, u8 opcode,
 				   u8 status, int err);
+bool ionic_notifyq_service(struct ionic_cq *cq);
+bool ionic_adminq_service(struct ionic_cq *cq);
 
 int ionic_dev_cmd_wait(struct ionic *ionic, unsigned long max_wait);
 int ionic_dev_cmd_wait_nomsg(struct ionic *ionic, unsigned long max_wait);
@@ -106,5 +114,7 @@ int ionic_reset(struct ionic *ionic);
 int ionic_port_identify(struct ionic *ionic);
 int ionic_port_init(struct ionic *ionic);
 int ionic_port_reset(struct ionic *ionic);
+
+bool ionic_doorbell_wa(struct ionic *ionic);
 
 #endif /* _IONIC_H_ */

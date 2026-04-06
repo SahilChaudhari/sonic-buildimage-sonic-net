@@ -7,13 +7,17 @@
 #include <linux/ptp_clock_kernel.h>
 #include <linux/timecounter.h>
 
-#ifdef CONFIG_DIMLIB
+#if IS_ENABLED(CONFIG_DIMLIB)
 #include <linux/dim.h>
 #else
 #include "dim.h"
 #endif
 
 #include "ionic_rx_filter.h"
+
+#if IS_ENABLED(CONFIG_PTP_1588_CLOCK)
+#include "ionic_phc_state.h"
+#endif
 
 #define IONIC_ADMINQ_LENGTH	16	/* must be a power of two */
 #define IONIC_NOTIFYQ_LENGTH	64	/* must be a power of two */
@@ -50,6 +54,9 @@ struct ionic_tx_stats {
 	u64 dma_map_err;
 	u64 hwstamp_valid;
 	u64 hwstamp_invalid;
+#ifdef HAVE_NET_XDP
+	u64 xdp_frames;
+#endif
 };
 
 struct ionic_rx_stats {
@@ -75,6 +82,13 @@ struct ionic_rx_stats {
 	u64 buf_reused;
 	u64 buf_exhausted;
 	u64 buf_not_reusable;
+#ifdef HAVE_NET_XDP
+	u64 xdp_drop;
+	u64 xdp_aborted;
+	u64 xdp_pass;
+	u64 xdp_tx;
+	u64 xdp_redirect;
+#endif
 };
 
 #define IONIC_QCQ_F_INITED		BIT(0)
@@ -102,6 +116,7 @@ struct ionic_qcq {
 	void *sg_base;
 	dma_addr_t sg_base_pa;	/* might not be page aligned */
 	u32 sg_size;
+	unsigned int flags;
 	void __iomem *cmb_q_base;
 	phys_addr_t cmb_q_base_pa;
 	u32 cmb_q_size;
@@ -111,14 +126,12 @@ struct ionic_qcq {
 	struct dim dim;
 	struct ionic_queue q;
 	struct ionic_cq cq;
-	struct ionic_intr_info intr;
-	struct timer_list napi_deadline;
 	struct napi_struct napi;
+	struct ionic_intr_info intr;
 #ifdef IONIC_DEBUG_STATS
 	struct ionic_napi_stats napi_stats;
 #endif
-	unsigned int flags;
-	struct ionic_qcq *napi_qcq;
+	struct work_struct doorbell_napi_work;
 	struct dentry *dentry;
 };
 
@@ -170,6 +183,14 @@ struct ionic_lif_sw_stats {
 	u64 hw_rx_over_errors;
 	u64 hw_rx_missed_errors;
 	u64 hw_tx_aborted_errors;
+#ifdef HAVE_NET_XDP
+	u64 xdp_drop;
+	u64 xdp_aborted;
+	u64 xdp_pass;
+	u64 xdp_tx;
+	u64 xdp_redirect;
+	u64 xdp_frames;
+#endif
 };
 
 enum ionic_lif_state_flags {
@@ -201,17 +222,6 @@ struct ionic_lif_cfg {
 	void (*reset_cb)(void *priv);
 };
 
-struct ionic_qtype_info {
-	u8  version;
-	u8  supported;
-	u64 features;
-	u16 desc_sz;
-	u16 comp_sz;
-	u16 sg_desc_sz;
-	u16 max_sg_elems;
-	u16 sg_desc_stride;
-};
-
 struct ionic_phc;
 
 #define IONIC_LIF_NAME_MAX_SZ		32
@@ -220,7 +230,8 @@ struct ionic_lif {
 	DECLARE_BITMAP(state, IONIC_LIF_F_STATE_SIZE);
 	struct ionic *ionic;
 	u64 __iomem *kern_dbpage;
-	u32 rx_copybreak;
+	u16 rx_copybreak;
+	u8 doorbell_wa:1;
 	unsigned int nxqs;
 
 	struct ionic_qcq **txqcqs;
@@ -277,6 +288,10 @@ struct ionic_lif {
 	union ionic_lif_identity *identity;
 	struct ionic_qtype_info qtype_info[IONIC_QTYPE_MAX];
 
+#ifdef CONFIG_AUXILIARY_BUS
+	struct ionic_aux_dev *ionic_adev;
+	struct mutex adev_lock;		/* lock for aux_dev actions */
+#endif
 	struct ionic_rx_filters rx_filters;
 	u32 rx_coalesce_usecs;		/* what the user asked for */
 	u32 rx_coalesce_hw;		/* what the hw is using */
@@ -291,11 +306,16 @@ struct ionic_lif {
 	u64 n_txrx_alloc;
 
 	struct dentry *dentry;
+	struct bpf_prog *xdp_prog;
+
+	__be32 int_mnic_ip;
+	u8 int_mnic_subnet;
 };
 
 #if IS_ENABLED(CONFIG_PTP_1588_CLOCK)
 struct ionic_phc {
-	spinlock_t lock; /* lock for cc and tc */
+	spinlock_t lock; /* lock for state_page, cc and tc */
+	struct ionic_phc_state *state_page;
 	struct cyclecounter cc;
 	struct timecounter tc;
 
@@ -386,10 +406,10 @@ static inline bool ionic_is_pf(struct ionic *ionic)
 
 static inline bool ionic_txq_hwstamp_enabled(struct ionic_queue *q)
 {
-	return unlikely(q->features & IONIC_TXQ_F_HWSTAMP);
+	return q->features & IONIC_TXQ_F_HWSTAMP;
 }
 
-void ionic_lif_deferred_enqueue(struct ionic_deferred *def,
+void ionic_lif_deferred_enqueue(struct ionic_lif *lif,
 				struct ionic_deferred_work *work);
 void ionic_link_status_check_request(struct ionic_lif *lif, bool can_sleep);
 #ifdef HAVE_VOID_NDO_GET_STATS64

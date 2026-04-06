@@ -1,0 +1,94 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: Copyright (C) 2024 Advanced Micro Devices, Inc.
+
+TAWK_REGISTRY := include/rtos-sw/registry/tawk_ipc
+TAWK_DIR := include/rtos-sw/src/lib/tawk
+DEVICE_DIR := $(TAWK_DIR)/device
+EXTRA_DIR := $(TAWK_DIR)/extra
+DATALINK_DIR := $(TAWK_DIR)/datalink
+TRANSPORT_DIR := $(TAWK_DIR)/transport
+HARDWARE_DIR := $(TAWK_DIR)/hardware
+TAWK_PLATFORM_DIR := $(TAWK_DIR)/platform
+DRV_HEADER_DIR := include/header
+
+ifdef BUILD_PLATFORM
+TAWK_IPC_WITH_PCI:=0
+TAWK_IPC_WITH_PLATFORM:=1
+else
+TAWK_IPC_WITH_PCI:=1
+TAWK_IPC_WITH_PLATFORM:=0
+endif
+
+ifeq ($(TAWK_IPC_WITH_PCI),1)
+TAWK_IPC_PROFILE:=1
+endif
+
+obj-m += tawk_ipc.o
+tawk_ipc-objs += src/ipc_main.o src/ipc_device.o src/ipc_req_handle.o src/ipc_channel.o
+ifeq ($(TAWK_IPC_WITH_PCI),1)
+tawk_ipc-objs += src/ipc_pci.o
+endif
+ifeq ($(TAWK_IPC_WITH_PLATFORM),1)
+tawk_ipc-objs += src/ipc_platform.o
+endif
+tawk_ipc-objs += $(DRV_HEADER_DIR)/protocol.o
+tawk_ipc-objs += $(TAWK_DIR)/ipc.o $(DATALINK_DIR)/datalink.o $(DATALINK_DIR)/fifo.o \
+		 $(DATALINK_DIR)/rstfsm.o $(TAWK_DIR)/protocol.o $(TRANSPORT_DIR)/transport.o \
+		 $(TRANSPORT_DIR)/cfgfsm.o
+tawk_ipc-objs += $(DEVICE_DIR)/device.o $(DEVICE_DIR)/pcie.o $(DEVICE_DIR)/mm.o
+tawk_ipc-objs += $(HARDWARE_DIR)/hardware.o $(HARDWARE_DIR)/mailbox.o $(HARDWARE_DIR)/rstsigs.o
+tawk_ipc-objs += $(TAWK_PLATFORM_DIR)/platform.o
+tawk_ipc-objs += $(EXTRA_DIR)/zephyr_compat/zephyr_compat.o
+ifeq ($(TAWK_IPC_PROFILE),1)
+tawk_ipc-objs += $(EXTRA_DIR)/stats/profile.o
+endif
+ifdef TAWK_DRV_DEBUG
+tawk_ipc-objs += $(EXTRA_DIR)/stats/debug.o
+tawk_ipc-objs += src/ipc_debug.o
+endif
+
+ccflags-y+=-I$(src)/include
+ccflags-y+=-I$(src)/$(EXTRA_DIR)/zephyr_compat/include
+ccflags-y+=-I$(src)/$(EXTRA_DIR)/stats/include
+ccflags-y+=-I$(src)/$(TAWK_REGISTRY)
+ccflags-y+=-I$(src)/$(TAWK_DIR)/include
+ccflags-y+=-I$(src)/$(EXTRA_DIR)/kmod/libc_compat
+ccflags-y+=-DIPC_BUILD_KERNEL_MODULE=1
+ifeq ($(TAWK_IPC_WITH_PCI),1)
+ccflags-y+=-DTAWK_IPC_WITH_PCI=1
+endif
+ifeq ($(TAWK_IPC_WITH_PLATFORM),1)
+ccflags-y+=-DTAWK_IPC_WITH_PLATFORM=1
+endif
+ccflags-y+=-DCONFIG_TAWK_IPC_DUMP_ON_PANIC=1
+ccflags-y+=-DCONFIG_TAWK_IPC_VERBOSE_LOG=0
+ccflags-y+=-DCONFIG_TAWK_IPC_THREAD_PRIORITY=0
+ccflags-y+=-DCONFIG_TAWK_IPC_WORKQ_THREAD_PRIORITY=1
+ccflags-y+=-DCONFIG_TAWK_IPC_PCIE_DEVICE_MIN_VERSION=0
+ccflags-y+=-DCONFIG_TAWK_IPC_PCIE_DEVICE_MAX_VERSION=1
+ccflags-y+=-DCONFIG_TAWK_IPC_DATALINK_TIMEOUT=5000
+ccflags-y+=-DCONFIG_TAWK_IPC_DATALINK_KEEPALIVE_INTERVAL=1001
+ccflags-y+=-DCONFIG_TAWK_IPC_TRANSPORT_TIMEOUT=30000
+ifeq ($(TAWK_IPC_PROFILE),1)
+ccflags-y+=-DTAWK_IPC_PROFILE=1
+endif
+ifdef TAWK_DRV_DEBUG
+ccflags-y+=-DTAWK_DRV_DEBUG=1
+endif
+ccflags-y+=-std=gnu99
+
+ifdef TAWK_DRV_DEBUG
+$(info ==================================)
+$(info ==================================)
+$(info =========== DEBUG MODE ===========)
+$(info ==================================)
+$(info ==================================)
+endif
+
+$(info ==================================)
+$(info TAWK_DIR ${TAWK_DIR} tawk_ipc-objs=${tawk_ipc-objs} ARCH=${ARCH})
+$(info ccflags-y ${ccflags-y} )
+$(info CROSS_COMPILE ${CROSS_COMPILE} )
+$(info KCFLAGS ${KCFLAGS} )
+$(info M ${M} MO ${MO} )
+$(info ==================================)

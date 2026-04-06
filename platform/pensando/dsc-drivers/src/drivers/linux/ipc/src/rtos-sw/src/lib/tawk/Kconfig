@@ -1,0 +1,75 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: Copyright (C) 2024 Advanced Micro Devices, Inc.
+
+config TAWK_IPC
+    bool "TAWK IPC library"
+    default n
+
+if TAWK_IPC
+
+config TAWK_IPC_PCIE_DEVICE_VERSION
+    int "TAWK IPC protocol version for PCIe device"
+    default 1
+
+config TAWK_IPC_PCIE_INTERRUPT_SUPPORTED
+    bool "Interrupts are not supported with version 0"
+    default TAWK_IPC_PCIE_DEVICE_VERSION > 0
+
+config TAWK_IPC_WITH_INTR
+    bool "Use HW intr resources; need for interrupt and doorbells"
+    default y
+    select INTRUTILS
+    depends on TAWK_IPC_PCIE_INTERRUPT_SUPPORTED
+
+config TAWK_IPC_STACK_SIZE
+    int "TAWK IPC thread stack size, expressed in bytes"
+    default 2048
+
+config TAWK_IPC_THREAD_PRIORITY
+    int "TAWK IPC thread priority"
+    default 0
+
+config TAWK_IPC_WORKQ_THREAD_PRIORITY
+    int "TAWK IPC WOKRQ thread priority"
+    default 1
+
+config TAWK_IPC_DATALINK_TIMEOUT
+    int "TAWK IPC datalink timeout in milliseconds, i.e. how long datalink \
+         might experience backpressure without being able to send messages \
+	 until triggering timeout"
+    default 5000
+
+config TAWK_IPC_TRANSPORT_TIMEOUT
+    int "TAWK IPC transport timeout in milliseconds, i.e. when the client's \
+         request fails with timeout, which might occur independently of the \
+         TAWK_IPC_DATALINK_TIMEOUT"
+    default 30000
+
+config TAWK_IPC_DATALINK_KEEPALIVE_INTERVAL
+    int "TAWK IPC keepalive interval in milliseconds, i.e. how often the \
+         core IPC library sends the keepalive messages"
+    default 1001
+
+endif
+
+config TAWK_IPC_LOG_LEVEL
+    int "TAWK IPC library log level"
+    default 4
+
+config TAWK_IPC_DUMP_ON_ERROR
+    bool "Enable automatic state dumping on gross error conditions detected by the library"
+    default y
+
+config TAWK_IPC_DUMP_ON_PANIC
+    bool "Dump the IPC state when hitting an assert"
+    default y
+
+config TAWK_IPC_VERBOSE_LOG
+    int "How verbose logging in TAWK IPC should be. 0 means no verbose logging, 1 verbose logging and 2 \
+         very verbose logging. Can be very noisy."
+    default 0
+
+config TAWK_IPC_CACHE_MANAGEMENT
+    bool "Enable cache management"
+    select CACHE_MANAGEMENT
+    default n

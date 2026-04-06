@@ -16,6 +16,7 @@ enum {
 	SFF8024_ID_QSFP_8438		= 0x0c,
 	SFF8024_ID_QSFP_8436_8636	= 0x0d,
 	SFF8024_ID_QSFP28_8636		= 0x11,
+	SFF8024_ID_QSFP_PLUS_CMIS	= 0x1e,
 };
 
 #include "ionic.h"
@@ -24,11 +25,11 @@ enum {
 #include "ionic_ethtool.h"
 #include "ionic_stats.h"
 
+#define IONIC_MAX_RX_COPYBREAK	min_t(u32, U16_MAX, IONIC_MAX_BUF_LEN)
+
 static const char ionic_priv_flags_strings[][ETH_GSTRING_LEN] = {
 #define IONIC_PRIV_F_RDMA_SNIFFER	BIT(0)
 	"rdma-sniffer",
-#define IONIC_PRIV_F_DEVICE_RESET	BIT(1)
-	"device-reset",
 #define IONIC_PRIV_F_CMB_RINGS		BIT(2)
 	"cmb-rings",
 
@@ -127,18 +128,23 @@ static void ionic_get_regs(struct net_device *netdev, struct ethtool_regs *regs,
 			   void *p)
 {
 	struct ionic_lif *lif = netdev_priv(netdev);
+	struct ionic_dev *idev;
 	unsigned int offset;
 	unsigned int size;
 
 	regs->version = IONIC_DEV_CMD_REG_VERSION;
 
+	idev = &lif->ionic->idev;
+	if (!idev->dev_info_regs)
+		return;
+
 	offset = 0;
 	size = IONIC_DEV_INFO_REG_COUNT * sizeof(u32);
-	memcpy_fromio(p + offset, lif->ionic->idev.dev_info_regs->words, size);
+	memcpy_fromio(p + offset, idev->dev_info_regs->words, size);
 
 	offset += size;
 	size = IONIC_DEV_CMD_REG_COUNT * sizeof(u32);
-	memcpy_fromio(p + offset, lif->ionic->idev.dev_cmd_regs->words, size);
+	memcpy_fromio(p + offset, idev->dev_cmd_regs->words, size);
 }
 
 #if (KERNEL_VERSION(6, 2, 0) <= LINUX_VERSION_CODE)
@@ -194,6 +200,30 @@ static int ionic_get_link_ksettings(struct net_device *netdev,
 		copper_seen++;
 		break;
 #endif
+
+#ifdef HAVE_ETHTOOL_50G_BITS
+	case IONIC_XCVR_PID_QSFP_50G_CR2_FC:
+	case IONIC_XCVR_PID_QSFP_50G_CR2:
+		ethtool_link_ksettings_add_link_mode(ks, supported,
+						     50000baseCR2_Full);
+		copper_seen++;
+		break;
+#endif
+
+#ifdef HAVE_ETHTOOL_200G_BITS
+	case IONIC_XCVR_PID_QSFP_200G_CR4:
+		ethtool_link_ksettings_add_link_mode(ks, supported, 200000baseCR4_Full);
+		copper_seen++;
+		break;
+#endif
+
+#ifdef HAVE_ETHTOOL_400G_BITS
+	case IONIC_XCVR_PID_QSFP_400G_CR4:
+		ethtool_link_ksettings_add_link_mode(ks, supported, 400000baseCR4_Full);
+		copper_seen++;
+		break;
+#endif
+
 	case IONIC_XCVR_PID_SFP_10GBASE_AOC:
 	case IONIC_XCVR_PID_SFP_10GBASE_CU:
 #ifdef HAVE_ETHTOOL_NEW_10G_BITS
@@ -280,10 +310,54 @@ static int ionic_get_link_ksettings(struct net_device *netdev,
 	case IONIC_XCVR_PID_QSFP_40GBASE_ER4:
 	case IONIC_XCVR_PID_SFP_25GBASE_LR:
 	case IONIC_XCVR_PID_SFP_25GBASE_ER:
-		dev_info(lif->ionic->dev, "no decode bits for xcvr type pid=%d / 0x%x\n",
+		dev_info(lif->ionic->dev,
+			 "no decode bits for xcvr type pid=%d / 0x%x\n",
 			 idev->port_info->status.xcvr.pid,
 			 idev->port_info->status.xcvr.pid);
 		break;
+
+#ifdef HAVE_ETHTOOL_200G_BITS
+	case IONIC_XCVR_PID_QSFP_200G_AOC:
+	case IONIC_XCVR_PID_QSFP_200G_SR4:
+		ethtool_link_ksettings_add_link_mode(ks, supported,
+						     200000baseSR4_Full);
+		break;
+	case IONIC_XCVR_PID_QSFP_200G_FR4:
+		ethtool_link_ksettings_add_link_mode(ks, supported,
+						     200000baseLR4_ER4_FR4_Full);
+		break;
+	case IONIC_XCVR_PID_QSFP_200G_DR4:
+		ethtool_link_ksettings_add_link_mode(ks, supported,
+						     200000baseDR4_Full);
+		break;
+	case IONIC_XCVR_PID_QSFP_200G_ACC:
+		dev_info_once(lif->ionic->dev,
+			      "no decode bits for xcvr type pid=%d / 0x%x\n",
+			      idev->port_info->status.xcvr.pid,
+			      idev->port_info->status.xcvr.pid);
+		break;
+#endif
+
+#ifdef HAVE_ETHTOOL_400G_BITS
+	case IONIC_XCVR_PID_QSFP_400G_FR4:
+		ethtool_link_ksettings_add_link_mode(ks, supported,
+						     400000baseLR4_ER4_FR4_Full);
+		break;
+	case IONIC_XCVR_PID_QSFP_400G_DR4:
+		ethtool_link_ksettings_add_link_mode(ks, supported,
+						     400000baseDR4_Full);
+		break;
+	case IONIC_XCVR_PID_QSFP_400G_SR4:
+		ethtool_link_ksettings_add_link_mode(ks, supported,
+						     400000baseSR4_Full);
+		break;
+	case IONIC_XCVR_PID_QSFP_400G_VR4:
+		dev_info_once(lif->ionic->dev, "no decode bits for xcvr type pid=%d / 0x%x\n",
+			      idev->port_info->status.xcvr.pid,
+			      idev->port_info->status.xcvr.pid);
+		break;
+#endif
+
 	case IONIC_XCVR_PID_UNKNOWN:
 		/* This means there's no module plugged in */
 		if (lif->ionic->is_mgmt_nic)
@@ -297,15 +371,15 @@ static int ionic_get_link_ksettings(struct net_device *netdev,
 		break;
 	}
 
-	bitmap_copy(ks->link_modes.advertising, ks->link_modes.supported,
-		    __ETHTOOL_LINK_MODE_MASK_NBITS);
-
 #ifdef ETHTOOL_FEC_NONE
 	if (idev->port_info->status.fec_type == IONIC_PORT_FEC_TYPE_FC)
-		ethtool_link_ksettings_add_link_mode(ks, advertising, FEC_BASER);
+		ethtool_link_ksettings_add_link_mode(ks, supported, FEC_BASER);
 	else if (idev->port_info->status.fec_type == IONIC_PORT_FEC_TYPE_RS)
-		ethtool_link_ksettings_add_link_mode(ks, advertising, FEC_RS);
+		ethtool_link_ksettings_add_link_mode(ks, supported, FEC_RS);
 #endif
+
+	bitmap_copy(ks->link_modes.advertising, ks->link_modes.supported,
+		    __ETHTOOL_LINK_MODE_MASK_NBITS);
 
 	if (lif->ionic->is_mgmt_nic)
 		ethtool_link_ksettings_add_link_mode(ks, supported, Backplane);
@@ -516,7 +590,7 @@ static int ionic_set_fecparam(struct net_device *netdev,
 }
 
 #endif /* ETHTOOL_FEC_NONE */
-#ifdef HAVE_COALESCE_EXTACK
+#ifdef IONIC_HAVE_ETHTOOL_COALESCE_CQE
 static int ionic_get_coalesce(struct net_device *netdev,
 			      struct ethtool_coalesce *coalesce,
 			      struct kernel_ethtool_coalesce *kernel_coal,
@@ -541,7 +615,7 @@ static int ionic_get_coalesce(struct net_device *netdev,
 	return 0;
 }
 
-#ifdef HAVE_COALESCE_EXTACK
+#ifdef IONIC_HAVE_ETHTOOL_COALESCE_CQE
 static int ionic_set_coalesce(struct net_device *netdev,
 			      struct ethtool_coalesce *coalesce,
 			      struct kernel_ethtool_coalesce *kernel_coal,
@@ -746,7 +820,7 @@ static int ionic_cmb_rings_toggle(struct ionic_lif *lif, bool cmb_tx, bool cmb_r
 	return 0;
 }
 
-#ifdef HAVE_RINGPARAM_EXTACK
+#ifdef IONIC_HAVE_ETHTOOL_SET_RINGPARAM_EXTACK
 static void ionic_get_ringparam(struct net_device *netdev,
 				struct ethtool_ringparam *ring,
 				struct kernel_ethtool_ringparam *kernel_ring,
@@ -768,7 +842,7 @@ static void ionic_get_ringparam(struct net_device *netdev,
 #endif
 }
 
-#ifdef HAVE_RINGPARAM_EXTACK
+#ifdef IONIC_HAVE_ETHTOOL_SET_RINGPARAM_EXTACK
 static int ionic_set_ringparam(struct net_device *netdev,
 			       struct ethtool_ringparam *ring,
 			       struct kernel_ethtool_ringparam *kernel_ring,
@@ -915,6 +989,11 @@ static int ionic_set_channels(struct net_device *netdev,
 		return -EINVAL;
 	}
 
+	if ((ch->rx_count || ch->tx_count) && lif->xdp_prog) {
+		netdev_info(lif->netdev, "Split Tx/Rx interrupts not available when using XDP\n");
+		return -EOPNOTSUPP;
+	}
+
 	if (ch->rx_count != ch->tx_count) {
 		netdev_info(netdev, "The rx and tx count must be equal\n");
 		return -EINVAL;
@@ -1030,11 +1109,6 @@ static int ionic_set_priv_flags(struct net_device *netdev, u32 priv_flags)
 	int rdma;
 	int ret;
 
-	if (priv_flags & IONIC_PRIV_F_DEVICE_RESET) {
-		ionic_reset_prepare(lif->ionic->pdev);
-		ionic_reset_done(lif->ionic->pdev);
-	}
-
 	clear_bit(IONIC_LIF_F_SW_DEBUG_STATS, lif->state);
 	if (priv_flags & IONIC_PRIV_F_SW_DBG_STATS)
 		set_bit(IONIC_LIF_F_SW_DEBUG_STATS, lif->state);
@@ -1072,15 +1146,24 @@ static u32 ionic_get_rxfh_key_size(struct net_device *netdev)
 	return IONIC_RSS_HASH_KEY_SIZE;
 }
 
-#ifdef HAVE_RXFH_HASHFUNC
-static int ionic_get_rxfh_legacy(struct net_device *netdev, u32 *indir, u8 *key,
+#ifdef IONIC_HAVE_RXFH_PARAM
+static int ionic_get_rxfh(struct net_device *netdev,
+			  struct ethtool_rxfh_param *rxfh)
+#elif defined(IONIC_HAVE_RXFH_HASHFUNC)
+static int ionic_get_rxfh(struct net_device *netdev, u32 *indir, u8 *key,
 			  u8 *hfunc)
 #else
-static int ionic_get_rxfh_legacy(struct net_device *netdev, u32 *indir, u8 *key)
+static int ionic_get_rxfh(struct net_device *netdev, u32 *indir, u8 *key)
 #endif
 {
 	struct ionic_lif *lif = netdev_priv(netdev);
-	unsigned int i, tbl_sz;
+#ifdef IONIC_HAVE_RXFH_PARAM
+	u32 *indir = rxfh->indir;
+	u8 *hfunc = &rxfh->hfunc;
+	u8 *key = rxfh->key;
+#endif
+	unsigned int tbl_sz;
+	unsigned int i;
 
 	if (indir) {
 		tbl_sz = le16_to_cpu(lif->ionic->ident.lif.eth.rss_ind_tbl_sz);
@@ -1091,7 +1174,7 @@ static int ionic_get_rxfh_legacy(struct net_device *netdev, u32 *indir, u8 *key)
 	if (key)
 		memcpy(key, lif->rss_hash_key, IONIC_RSS_HASH_KEY_SIZE);
 
-#ifdef HAVE_RXFH_HASHFUNC
+#if defined(IONIC_HAVE_RXFH_HASHFUNC) || defined(IONIC_HAVE_RXFH_PARAM)
 	if (hfunc)
 		*hfunc = ETH_RSS_HASH_TOP;
 #endif
@@ -1099,60 +1182,30 @@ static int ionic_get_rxfh_legacy(struct net_device *netdev, u32 *indir, u8 *key)
 	return 0;
 }
 
-static int ionic_get_rxfh(struct net_device *netdev,
-			  struct ethtool_rxfh_param *rxfh)
-{
-#ifdef HAVE_RXFH_HASHFUNC
-	u8 hfunc;
-	int ret;
-
-	ret = ionic_get_rxfh_legacy(netdev,
-				    rxfh->indir,
-				    rxfh->key,
-				    &hfunc);
-	if (!ret)
-		rxfh->hfunc = hfunc;
-
-	return ret;
-#else
-	return ionic_get_rxfh_legacy(netdev,
-				     rxfh->indir,
-				     rxfh->key);
-#endif
-}
-
-#ifdef HAVE_RXFH_HASHFUNC
-static int ionic_set_rxfh_legacy(struct net_device *netdev, const u32 *indir,
+#ifdef IONIC_HAVE_RXFH_PARAM
+static int ionic_set_rxfh(struct net_device *netdev,
+			  struct ethtool_rxfh_param *rxfh,
+			  struct netlink_ext_ack *extack)
+#elif defined(IONIC_HAVE_RXFH_HASHFUNC)
+static int ionic_set_rxfh(struct net_device *netdev, const u32 *indir,
 			  const u8 *key, const u8 hfunc)
 #else
-static int ionic_set_rxfh_legacy(struct net_device *netdev, const u32 *indir,
+static int ionic_set_rxfh(struct net_device *netdev, const u32 *indir,
 			  const u8 *key)
 #endif
 {
 	struct ionic_lif *lif = netdev_priv(netdev);
+#ifdef IONIC_HAVE_RXFH_PARAM
+	u32 *indir = rxfh->indir;
+	u8 hfunc = rxfh->hfunc;
+	u8 *key = rxfh->key;
+#endif
 
-#ifdef HAVE_RXFH_HASHFUNC
+#if defined(IONIC_HAVE_RXFH_HASHFUNC) || defined(IONIC_HAVE_RXFH_PARAM)
 	if (hfunc != ETH_RSS_HASH_NO_CHANGE && hfunc != ETH_RSS_HASH_TOP)
 		return -EOPNOTSUPP;
 #endif
-
 	return ionic_lif_rss_config(lif, lif->rss_types, key, indir);
-}
-
-static int ionic_set_rxfh(struct net_device *netdev,
-			  struct ethtool_rxfh_param *rxfh,
-			  struct netlink_ext_ack *extack)
-{
-#ifdef HAVE_RXFH_HASHFUNC
-	return ionic_set_rxfh_legacy(netdev,
-				     rxfh->indir,
-				     rxfh->key,
-				     rxfh->hfunc);
-#else
-	return ionic_set_rxfh_legacy(netdev,
-				     rxfh->indir,
-				     rxfh->key);
-#endif
 }
 
 static int ionic_set_tunable(struct net_device *dev,
@@ -1160,10 +1213,17 @@ static int ionic_set_tunable(struct net_device *dev,
 			     const void *data)
 {
 	struct ionic_lif *lif = netdev_priv(dev);
+	u32 rx_copybreak;
 
 	switch (tuna->id) {
 	case ETHTOOL_RX_COPYBREAK:
-		lif->rx_copybreak = *(u32 *)data;
+		rx_copybreak = *(u32 *)data;
+		if (rx_copybreak > IONIC_MAX_RX_COPYBREAK) {
+			netdev_err(dev, "Max supported rx_copybreak size: %u\n",
+				   IONIC_MAX_RX_COPYBREAK);
+			return -EINVAL;
+		}
+		lif->rx_copybreak = (u16)rx_copybreak;
 		break;
 	default:
 		return -EOPNOTSUPP;
@@ -1209,9 +1269,13 @@ static int ionic_get_module_info(struct net_device *netdev,
 		modinfo->type = ETH_MODULE_SFF_8436;
 		modinfo->eeprom_len = ETH_MODULE_SFF_8436_LEN;
 		break;
+	case SFF8024_ID_QSFP_PLUS_CMIS:
+		modinfo->type = ETH_MODULE_SFF_8472;
+		modinfo->eeprom_len = ETH_MODULE_SFF_8472_LEN;
+		break;
 	case SFF8024_ID_UNK:
 		if (lif->ionic->is_mgmt_nic)
-			netdev_info(netdev, "no xcvr on mgmt nic\n");
+			netdev_dbg(netdev, "no xcvr on mgmt nic\n");
 		else
 			netdev_info(netdev, "no xcvr connected? type 0x%02x\n",
 				    xcvr->sprom[0]);
@@ -1227,29 +1291,20 @@ static int ionic_get_module_info(struct net_device *netdev,
 	return 0;
 }
 
-static int ionic_get_module_eeprom(struct net_device *netdev,
-				   struct ethtool_eeprom *ee,
-				   u8 *data)
+static int ionic_do_module_copy(u8 *dst, u8 *src, u32 len)
 {
-	struct ionic_lif *lif = netdev_priv(netdev);
-	struct ionic_dev *idev = &lif->ionic->idev;
-	struct ionic_xcvr_status *xcvr;
-	char tbuf[sizeof(xcvr->sprom)];
+	char tbuf[sizeof_field(struct ionic_xcvr_status, sprom)];
 	int count = 10;
-	u32 len;
 
 	/* The NIC keeps the module prom up-to-date in the DMA space
 	 * so we can simply copy the module bytes into the data buffer.
 	 */
-	xcvr = &idev->port_info->status.xcvr;
-	len = min_t(u32, sizeof(xcvr->sprom), ee->len);
-
 	do {
-		memcpy(data, xcvr->sprom, len);
-		memcpy(tbuf, xcvr->sprom, len);
+		memcpy(dst, src, len);
+		memcpy(tbuf, src, len);
 
 		/* Let's make sure we got a consistent copy */
-		if (!memcmp(data, tbuf, len))
+		if (!memcmp(dst, tbuf, len))
 			break;
 
 	} while (--count);
@@ -1260,29 +1315,123 @@ static int ionic_get_module_eeprom(struct net_device *netdev,
 	return 0;
 }
 
+static int ionic_get_module_eeprom(struct net_device *netdev,
+				   struct ethtool_eeprom *ee,
+				   u8 *data)
+{
+	struct ionic_lif *lif = netdev_priv(netdev);
+	struct ionic_dev *idev = &lif->ionic->idev;
+	u32 start = ee->offset;
+	u32 err = -EINVAL;
+	u32 size = 0;
+	u8 *src;
+
+	/* Read A0 section */
+	if (start < ETH_MODULE_SFF_8079_LEN) {
+		/* Limit transfer size to the A0 section boundary */
+		if (start + ee->len > ETH_MODULE_SFF_8079_LEN)
+			size = ETH_MODULE_SFF_8079_LEN - start;
+		else
+			size = ee->len;
+
+		src = &idev->port_info->status.xcvr.sprom[start];
+		err = ionic_do_module_copy(data, src, size);
+		if (err)
+			return err;
+
+		data += size;
+		start += size;
+	}
+
+	/* Read A2 section */
+	if (start >= ETH_MODULE_SFF_8079_LEN &&
+	    start < ETH_MODULE_SFF_8472_LEN) {
+		size = ee->len - size;
+		/* Limit transfer size to the A2 section boundary */
+		if (start + size > ETH_MODULE_SFF_8472_LEN)
+			size = ETH_MODULE_SFF_8472_LEN - start;
+
+		start -= ETH_MODULE_SFF_8079_LEN;
+		src = &idev->port_info->sprom_epage[start];
+		err = ionic_do_module_copy(data, src, size);
+		if (err)
+			return err;
+	}
+
+	return err;
+}
+
+#ifdef IONIC_HAVE_MODULE_EEPROM_BY_PAGE
+static int ionic_get_module_eeprom_by_page(struct net_device *netdev,
+					   const struct ethtool_module_eeprom *page_data,
+					   struct netlink_ext_ack *extack)
+{
+	struct ionic_lif *lif = netdev_priv(netdev);
+	struct ionic_dev *idev = &lif->ionic->idev;
+	int err;
+	u8 *src;
+
+	if (!page_data->length)
+		return -EINVAL;
+
+	if (page_data->bank != 0) {
+		NL_SET_ERR_MSG_MOD(extack, "Only bank 0 is supported");
+		return -EINVAL;
+	}
+
+	switch (page_data->page) {
+	case 0:
+		src = &idev->port_info->status.xcvr.sprom[page_data->offset];
+		break;
+	case 1:
+		src = &idev->port_info->sprom_page1[page_data->offset - 128];
+		break;
+	case 2:
+		src = &idev->port_info->sprom_page2[page_data->offset - 128];
+		break;
+	case 17:
+		src = &idev->port_info->sprom_page17[page_data->offset - 128];
+		break;
+	default:
+		return -EOPNOTSUPP;
+	}
+
+	memset(page_data->data, 0, page_data->length);
+	err = ionic_do_module_copy(page_data->data, src, page_data->length);
+	if (err)
+		return err;
+
+	return page_data->length;
+}
+#endif /* IONIC_HAVE_MODULE_EEPROM_BY_PAGE */
+
 #if IS_ENABLED(CONFIG_PTP_1588_CLOCK)
+#ifdef IONIC_HAVE_KERNEL_ETHTOOL_TS_INFO
 static int ionic_get_ts_info(struct net_device *netdev,
 			     struct kernel_ethtool_ts_info *info)
+#else
+static int ionic_get_ts_info(struct net_device *netdev,
+			     struct ethtool_ts_info *info)
+#endif
 {
 	struct ionic_lif *lif = netdev_priv(netdev);
 	struct ionic *ionic = lif->ionic;
 	__le64 mask;
 
-	/* Fallback to generic ethtool handler if no PHC */
 	if (!lif->phc || !lif->phc->ptp)
 		return ethtool_op_get_ts_info(netdev, info);
 
 	info->phc_index = ptp_clock_index(lif->phc->ptp);
 
-	info->so_timestamping =
-		SOF_TIMESTAMPING_TX_SOFTWARE |
-		SOF_TIMESTAMPING_RX_SOFTWARE |
-		SOF_TIMESTAMPING_SOFTWARE |
-		SOF_TIMESTAMPING_TX_HARDWARE |
-		SOF_TIMESTAMPING_RX_HARDWARE |
-		SOF_TIMESTAMPING_RAW_HARDWARE;
+	info->so_timestamping = SOF_TIMESTAMPING_TX_SOFTWARE |
+				SOF_TIMESTAMPING_RX_SOFTWARE |
+				SOF_TIMESTAMPING_SOFTWARE |
+				SOF_TIMESTAMPING_TX_HARDWARE |
+				SOF_TIMESTAMPING_RX_HARDWARE |
+				SOF_TIMESTAMPING_RAW_HARDWARE;
 
-	/* TX timestamp modes */
+	/* tx modes */
+
 	info->tx_types = BIT(HWTSTAMP_TX_OFF) |
 			 BIT(HWTSTAMP_TX_ON);
 
@@ -1296,7 +1445,8 @@ static int ionic_get_ts_info(struct net_device *netdev,
 		info->tx_types |= BIT(HWTSTAMP_TX_ONESTEP_P2P);
 #endif
 
-	/* RX timestamp filters */
+	/* rx filters */
+
 	info->rx_filters = BIT(HWTSTAMP_FILTER_NONE) |
 			   BIT(HWTSTAMP_FILTER_ALL);
 
@@ -1356,7 +1506,7 @@ static int ionic_get_ts_info(struct net_device *netdev,
 
 	return 0;
 }
-#endif /* CONFIG_PTP_1588_CLOCK */
+#endif
 
 static int ionic_nway_reset(struct net_device *netdev)
 {
@@ -1434,6 +1584,9 @@ static const struct ethtool_ops ionic_ethtool_ops = {
 	.set_tunable		= ionic_set_tunable,
 	.get_module_info	= ionic_get_module_info,
 	.get_module_eeprom	= ionic_get_module_eeprom,
+#ifdef IONIC_HAVE_MODULE_EEPROM_BY_PAGE
+	.get_module_eeprom_by_page	= ionic_get_module_eeprom_by_page,
+#endif
 	.get_pauseparam		= ionic_get_pauseparam,
 	.set_pauseparam		= ionic_set_pauseparam,
 #ifdef ETHTOOL_FEC_NONE
@@ -1451,4 +1604,3 @@ void ionic_ethtool_set_ops(struct net_device *netdev)
 {
 	netdev->ethtool_ops = &ionic_ethtool_ops;
 }
-

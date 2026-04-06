@@ -9,6 +9,19 @@
 #include "ionic_lif.h"
 #include "ionic_txrx.h"
 
+struct net_device *ionic_get_netdev_from_handle(void *handle)
+{
+	struct ionic_lif *lif = handle;
+
+	if (!lif)
+		return ERR_PTR(-ENXIO);
+
+	dev_hold(lif->netdev);
+
+	return lif->netdev;
+}
+EXPORT_SYMBOL_GPL(ionic_get_netdev_from_handle);
+
 void *ionic_get_handle_from_netdev(struct net_device *netdev,
 				   const char *api_version,
 				   enum ionic_api_prsn prsn)
@@ -60,7 +73,6 @@ void ionic_api_request_reset(void *handle)
 
 	if (err) {
 		netdev_warn(lif->netdev, "request_reset: error %d\n", err);
-		return;
 	}
 
 	if (lif->child_lif_cfg.priv &&
@@ -85,8 +97,9 @@ int ionic_api_set_private(void *handle, void *priv,
 			  enum ionic_api_prsn prsn)
 {
 	struct ionic_lif *lif = handle;
-	struct ionic_lif_cfg *cfg = &lif->child_lif_cfg;
+	struct ionic_lif_cfg *cfg;
 
+	cfg = &lif->child_lif_cfg;
 	if (priv && cfg->priv)
 		return -EBUSY;
 
@@ -135,10 +148,38 @@ const union ionic_lif_identity *ionic_api_get_identity(void *handle,
 }
 EXPORT_SYMBOL_GPL(ionic_api_get_identity);
 
-int ionic_api_get_intr(void *handle, int *irq)
+int ionic_api_get_queue_identity(void *handle, int qtype, struct ionic_qtype_info *qti)
 {
 	struct ionic_lif *lif = handle;
+
+	memcpy(qti, &lif->qtype_info[qtype], sizeof(struct ionic_qtype_info));
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(ionic_api_get_queue_identity);
+
+u8 ionic_api_get_expdb(void *handle)
+{
+	struct ionic_lif *lif = handle;
+	u8 expdb_support = 0;
+
+	if (lif->ionic->idev.phy_cmb_expdb64_pages)
+		expdb_support |= IONIC_EXPDB_64B_WQE;
+	if (lif->ionic->idev.phy_cmb_expdb128_pages)
+		expdb_support |= IONIC_EXPDB_128B_WQE;
+	if (lif->ionic->idev.phy_cmb_expdb256_pages)
+		expdb_support |= IONIC_EXPDB_256B_WQE;
+	if (lif->ionic->idev.phy_cmb_expdb512_pages)
+		expdb_support |= IONIC_EXPDB_512B_WQE;
+
+	return expdb_support;
+}
+EXPORT_SYMBOL_GPL(ionic_api_get_expdb);
+
+int ionic_api_get_intr(void *handle, int *irq)
+{
 	struct ionic_intr_info *intr_obj;
+	struct ionic_lif *lif = handle;
 	int err;
 
 	if (!lif->nrdma_eqs_avail)
@@ -178,11 +219,10 @@ void ionic_api_put_intr(void *handle, int intr)
 }
 EXPORT_SYMBOL_GPL(ionic_api_put_intr);
 
-int ionic_api_get_cmb(void *handle, u32 *pgid, phys_addr_t *pgaddr, int order)
+int ionic_api_get_cmb(void *handle, u32 *pgid, phys_addr_t *pgaddr, int order,
+		      u8 stride_log2, bool *expdb)
 {
-	struct ionic_lif *lif = handle;
-
-	return ionic_get_cmb(lif, pgid, pgaddr, order);
+	return ionic_get_cmb(handle, pgid, pgaddr, order, stride_log2, expdb);
 }
 EXPORT_SYMBOL_GPL(ionic_api_get_cmb);
 
@@ -257,6 +297,21 @@ void ionic_api_put_dbid(void *handle, int dbid)
 }
 EXPORT_SYMBOL_GPL(ionic_api_put_dbid);
 
+void *ionic_api_phc_state_page(void *handle)
+{
+#if IS_ENABLED(CONFIG_PTP_1588_CLOCK)
+	struct ionic_lif *lif = handle;
+
+	if (!lif->phc)
+		return NULL;
+
+	return lif->phc->state_page;
+#else
+	return NULL;
+#endif
+}
+EXPORT_SYMBOL_GPL(ionic_api_phc_state_page);
+
 int ionic_api_adminq_post(void *handle, struct ionic_admin_ctx *ctx)
 {
 	struct ionic_lif *lif = handle;
@@ -264,3 +319,11 @@ int ionic_api_adminq_post(void *handle, struct ionic_admin_ctx *ctx)
 	return ionic_adminq_post(lif, ctx);
 }
 EXPORT_SYMBOL_GPL(ionic_api_adminq_post);
+
+int ionic_api_adminq_post_wait(void *handle, struct ionic_admin_ctx *ctx)
+{
+	struct ionic_lif *lif = handle;
+
+	return ionic_adminq_post_wait(lif, ctx);
+}
+EXPORT_SYMBOL_GPL(ionic_api_adminq_post_wait);

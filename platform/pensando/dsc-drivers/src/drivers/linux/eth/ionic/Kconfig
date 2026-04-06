@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: GPL-2.0
-# Copyright (c) 2019 - 2020 Pensando Systems, Inc
+# Copyright (C) 2019-2024, Advanced Micro Devices, Inc.
 #
 # Pensando device configuration
 #
 
 config NET_VENDOR_PENSANDO
-	bool "Pensando devices"
+	bool "AMD Pensando devices"
 	default y
 	help
 	  If you have a Distributed Services Card (DSC) belonging to this
@@ -19,7 +19,7 @@ config NET_VENDOR_PENSANDO
 if NET_VENDOR_PENSANDO
 
 config IONIC
-	tristate "Pensando DSC Ethernet Support"
+	tristate "AMD Pensando DSC Ethernet Support"
 	depends on 64BIT && PCI
 	select NET_DEVLINK
 	help

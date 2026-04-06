@@ -37,7 +37,6 @@ void ionic_rx_filter_replay(struct ionic_lif *lif)
 	for (i = 0; i < IONIC_RX_FILTER_HLISTS; i++) {
 		head = &lif->rx_filters.by_id[i];
 		hlist_for_each_entry_safe(f, tmp, head, by_id) {
-			ctx.work = COMPLETION_INITIALIZER_ONSTACK(ctx.work);
 			memcpy(ac, &f->cmd, sizeof(f->cmd));
 			dev_dbg(&lif->netdev->dev, "replay filter command:\n");
 			dynamic_hex_dump("cmd ", DUMP_PREFIX_OFFSET, 16, 1,
@@ -263,8 +262,8 @@ int ionic_lif_list_addr(struct ionic_lif *lif, const u8 *addr, bool mode)
 
 	f = ionic_rx_filter_by_addr(lif, addr);
 	if (mode == ADD_ADDR && !f) {
+		/* new filter, so set it up to be added in the next sync */
 		struct ionic_admin_ctx ctx = {
-			.work = COMPLETION_INITIALIZER_ONSTACK(ctx.work),
 			.cmd.rx_filter_add = {
 				.opcode = IONIC_CMD_RX_FILTER_ADD,
 				.lif_index = cpu_to_le16(lif->index),
@@ -281,15 +280,30 @@ int ionic_lif_list_addr(struct ionic_lif *lif, const u8 *addr, bool mode)
 		}
 
 	} else if (mode == ADD_ADDR && f) {
+		/* we already have this filter */
+
+		/* a previous action might have tried to delete it just
+		 * before adding it again, and the sync hasn't cleaned
+		 * it yet, so simply mark it again as sync'd
+		 */
 		if (f->state == IONIC_FILTER_STATE_OLD)
 			f->state = IONIC_FILTER_STATE_SYNCED;
 
 	} else if (mode == DEL_ADDR && f) {
-		if (f->state == IONIC_FILTER_STATE_NEW)
+		/* delete a filter we have */
+
+		if (f->state == IONIC_FILTER_STATE_NEW ||
+		    f->state == IONIC_FILTER_STATE_REJECTED)
+			/* since it hasn't been sync'd to the firmware,
+			 * simply remove it from our local list
+			 */
 			ionic_rx_filter_free(lif, f);
 		else if (f->state == IONIC_FILTER_STATE_SYNCED)
+			/* mark it for removal on the next sync cycle */
 			f->state = IONIC_FILTER_STATE_OLD;
+
 	} else if (mode == DEL_ADDR && !f) {
+		/* we don't have this filter, so no action needed */
 		spin_unlock_bh(&lif->rx_filters.lock);
 		return -ENOENT;
 	}
@@ -305,7 +319,6 @@ static int ionic_lif_filter_add(struct ionic_lif *lif,
 				struct ionic_rx_filter_add_cmd *ac)
 {
 	struct ionic_admin_ctx ctx = {
-		.work = COMPLETION_INITIALIZER_ONSTACK(ctx.work),
 	};
 	struct ionic_rx_filter *f;
 	int nfilters;
@@ -319,7 +332,8 @@ static int ionic_lif_filter_add(struct ionic_lif *lif,
 	f = ionic_rx_filter_find(lif, &ctx.cmd.rx_filter_add);
 	if (f) {
 		/* don't bother if we already have it and it is sync'd */
-		if (f->state == IONIC_FILTER_STATE_SYNCED) {
+		if (f->state == IONIC_FILTER_STATE_SYNCED ||
+		    f->state == IONIC_FILTER_STATE_REJECTED) {
 			spin_unlock_bh(&lif->rx_filters.lock);
 			return 0;
 		}
@@ -373,6 +387,11 @@ static int ionic_lif_filter_add(struct ionic_lif *lif,
 			if (err != -ENOSPC)
 				set_bit(IONIC_LIF_F_FILTER_SYNC_NEEDED, lif->state);
 		}
+
+		/* ignore the refused filter on the next sync cycle */
+		if (err == -EPERM || err == -EOPNOTSUPP)
+			ionic_rx_filter_save(lif, 0, IONIC_RXQ_INDEX_ANY, 0, &ctx,
+					     IONIC_FILTER_STATE_REJECTED);
 
 		spin_unlock_bh(&lif->rx_filters.lock);
 
@@ -468,7 +487,6 @@ static int ionic_lif_filter_del(struct ionic_lif *lif,
 				struct ionic_rx_filter_add_cmd *ac)
 {
 	struct ionic_admin_ctx ctx = {
-		.work = COMPLETION_INITIALIZER_ONSTACK(ctx.work),
 		.cmd.rx_filter_del = {
 			.opcode = IONIC_CMD_RX_FILTER_DEL,
 			.lif_index = cpu_to_le16(lif->index),
@@ -507,7 +525,8 @@ static int ionic_lif_filter_del(struct ionic_lif *lif,
 
 	spin_unlock_bh(&lif->rx_filters.lock);
 
-	if (state != IONIC_FILTER_STATE_NEW) {
+	if (state != IONIC_FILTER_STATE_NEW &&
+	    state != IONIC_FILTER_STATE_REJECTED) {
 		err = ionic_adminq_post_wait_nomsg(lif, &ctx);
 
 		switch (err) {

@@ -82,7 +82,8 @@ static int ionic_lif_hwstamp_set_ts_config(struct ionic_lif *lif,
 	bool rx_all;
 	__le64 mask;
 
-	if (!lif->phc || !lif->phc->ptp)
+	if (!lif->phc || !lif->phc->ptp ||
+	    !(lif->hw_features & IONIC_ETH_HW_TIMESTAMP))
 		return -EOPNOTSUPP;
 
 	mutex_lock(&lif->phc->config_lock);
@@ -194,7 +195,8 @@ int ionic_lif_hwstamp_set(struct ionic_lif *lif, struct ifreq *ifr)
 	struct hwtstamp_config config;
 	int err;
 
-	if (!lif->phc || !lif->phc->ptp)
+	if (!lif->phc || !lif->phc->ptp ||
+	    !(lif->hw_features & IONIC_ETH_HW_TIMESTAMP))
 		return -EOPNOTSUPP;
 
 	if (copy_from_user(&config, ifr->ifr_data, sizeof(config)))
@@ -218,7 +220,8 @@ void ionic_lif_hwstamp_replay(struct ionic_lif *lif)
 {
 	int err;
 
-	if (!lif->phc || !lif->phc->ptp)
+	if (!lif->phc || !lif->phc->ptp ||
+	    !(lif->hw_features & IONIC_ETH_HW_TIMESTAMP))
 		return;
 
 	mutex_lock(&lif->queue_lock);
@@ -232,7 +235,8 @@ void ionic_lif_hwstamp_recreate_queues(struct ionic_lif *lif)
 {
 	int err;
 
-	if (!lif->phc || !lif->phc->ptp)
+	if (!lif->phc || !lif->phc->ptp ||
+	    !(lif->hw_features & IONIC_ETH_HW_TIMESTAMP))
 		return;
 
 	mutex_lock(&lif->phc->config_lock);
@@ -256,7 +260,8 @@ int ionic_lif_hwstamp_get(struct ionic_lif *lif, struct ifreq *ifr)
 {
 	struct hwtstamp_config config;
 
-	if (!lif->phc || !lif->phc->ptp)
+	if (!lif->phc || !lif->phc->ptp ||
+	    !(lif->hw_features & IONIC_ETH_HW_TIMESTAMP))
 		return -EOPNOTSUPP;
 
 	mutex_lock(&lif->phc->config_lock);
@@ -308,7 +313,11 @@ static u64 ionic_hwstamp_read(struct ionic *ionic)
 	return (u64)tick_low | ((u64)tick_high << 32);
 }
 
+#ifdef IONIC_HAVE_PHC_CC_READ_CONST
 static u64 ionic_cc_read(const struct cyclecounter *cc)
+#else
+static u64 ionic_cc_read(struct cyclecounter *cc)
+#endif
 {
 	struct ionic_phc *phc = container_of(cc, struct ionic_phc, cc);
 	struct ionic *ionic = phc->lif->ionic;
@@ -322,8 +331,6 @@ static u64 ionic_cc_read(const struct cyclecounter *cc)
 
 static int ionic_setphc_cmd(struct ionic_phc *phc, struct ionic_admin_ctx *ctx)
 {
-	ctx->work = COMPLETION_INITIALIZER_ONSTACK(ctx->work);
-
 	ctx->cmd.lif_setphc.opcode = IONIC_CMD_LIF_SETPHC;
 	ctx->cmd.lif_setphc.lif_index = cpu_to_le16(phc->lif->index);
 
@@ -334,6 +341,26 @@ static int ionic_setphc_cmd(struct ionic_phc *phc, struct ionic_admin_ctx *ctx)
 	ctx->cmd.lif_setphc.shift = cpu_to_le32(phc->cc.shift);
 
 	return ionic_adminq_post(phc->lif, ctx);
+}
+
+static void ionic_phc_state_page_update(struct ionic_phc *phc)
+{
+	struct ionic_phc_state *state = phc->state_page;
+	u32 seq;
+
+	/* read current seq */
+	seq = smp_load_acquire(&state->seq) & ~1;
+
+	/* make seq odd for updating */
+	smp_store_mb(state->seq, seq | 1);
+
+	state->tick = phc->tc.cycle_last;
+	state->nsec = phc->tc.nsec;
+	state->frac = phc->tc.frac;
+	state->mult = phc->cc.mult;
+
+	/* make seq the next even number for update completed */
+	smp_store_release(&state->seq, seq + 2);
 }
 
 #ifdef HAVE_PTP_ADJFINE
@@ -364,6 +391,8 @@ static int ionic_phc_adjfine(struct ptp_clock_info *info, long scaled_ppm)
 	timecounter_read(&phc->tc);
 	phc->cc.mult = adj;
 
+	ionic_phc_state_page_update(phc);
+
 	/* Setphc commands are posted in-order, sequenced by phc->lock.  We
 	 * need to drop the lock before waiting for the command to complete.
 	 */
@@ -389,6 +418,8 @@ static int ionic_phc_adjtime(struct ptp_clock_info *info, s64 delta)
 	spin_lock_irqsave(&phc->lock, irqflags);
 
 	timecounter_adjtime(&phc->tc, delta);
+
+	ionic_phc_state_page_update(phc);
 
 	/* Setphc commands are posted in-order, sequenced by phc->lock.  We
 	 * need to drop the lock before waiting for the command to complete.
@@ -418,6 +449,8 @@ static int ionic_phc_settime64(struct ptp_clock_info *info,
 	spin_lock_irqsave(&phc->lock, irqflags);
 
 	timecounter_init(&phc->tc, &phc->cc, ns);
+
+	ionic_phc_state_page_update(phc);
 
 	/* Setphc commands are posted in-order, sequenced by phc->lock.  We
 	 * need to drop the lock before waiting for the command to complete.
@@ -467,9 +500,14 @@ static int ionic_phc_gettime64(struct ptp_clock_info *info,
 static long ionic_phc_aux_work(struct ptp_clock_info *info)
 {
 	struct ionic_phc *phc = container_of(info, struct ionic_phc, ptp_info);
+	struct ionic_lif *lif = phc->lif;
 	struct ionic_admin_ctx ctx = {};
 	unsigned long irqflags;
 	int err;
+
+	/* Prevent phc worker from running and restarting in shutdown */
+	if (test_bit(IONIC_LIF_F_IN_SHUTDOWN, lif->state))
+		return -ENODEV;
 
 	/* Do not update phc during device upgrade, but keep polling to resume
 	 * after upgrade.  Since we don't update the point in time basis, there
@@ -477,13 +515,15 @@ static long ionic_phc_aux_work(struct ptp_clock_info *info)
 	 * upgrade.  After upgrade, it will need to be readjusted back to the
 	 * correct time by the ptp daemon.
 	 */
-	if (test_bit(IONIC_LIF_F_FW_RESET, phc->lif->state))
+	if (test_bit(IONIC_LIF_F_FW_RESET, lif->state))
 		return phc->aux_work_delay;
 
 	spin_lock_irqsave(&phc->lock, irqflags);
 
 	/* update point-in-time basis to now */
 	timecounter_read(&phc->tc);
+
+	ionic_phc_state_page_update(phc);
 
 	/* Setphc commands are posted in-order, sequenced by phc->lock.  We
 	 * need to drop the lock before waiting for the command to complete.
@@ -492,7 +532,7 @@ static long ionic_phc_aux_work(struct ptp_clock_info *info)
 
 	spin_unlock_irqrestore(&phc->lock, irqflags);
 
-	ionic_adminq_wait(phc->lif, &ctx, err, true);
+	ionic_adminq_wait(lif, &ctx, err, true);
 
 	return phc->aux_work_delay;
 }
@@ -504,7 +544,8 @@ void ionic_phc_aux_work_helper(struct work_struct *work)
 	long delay;
 
 	delay = ionic_phc_aux_work(&phc->ptp_info);
-	schedule_delayed_work(&phc->dwork, delay);
+	if (delay >= 0)
+		schedule_delayed_work(&phc->dwork, delay);
 }
 #endif
 
@@ -543,7 +584,8 @@ static const struct ptp_clock_info ionic_ptp_info = {
 
 void ionic_lif_register_phc(struct ionic_lif *lif)
 {
-	if (!lif->phc || !(lif->hw_features & IONIC_ETH_HW_TIMESTAMP))
+	if (!lif->phc || !(lif->hw_features & (IONIC_ETH_HW_TIMESTAMP |
+					       IONIC_ETH_HW_RDMA_TIMESTAMP)))
 		return;
 
 	lif->phc->ptp = ptp_clock_register(&lif->phc->ptp_info, lif->ionic->dev);
@@ -589,12 +631,18 @@ void ionic_lif_alloc_phc(struct ionic_lif *lif)
 		return;
 
 	features = le64_to_cpu(ionic->ident.lif.eth.config.features);
-	if (!(features & IONIC_ETH_HW_TIMESTAMP))
+	if (!(features & (IONIC_ETH_HW_TIMESTAMP | IONIC_ETH_HW_RDMA_TIMESTAMP)))
 		return;
 
 	phc = devm_kzalloc(ionic->dev, sizeof(*phc), GFP_KERNEL);
 	if (!phc)
 		return;
+
+	phc->state_page = (void *)get_zeroed_page(GFP_KERNEL);
+	if (!phc->state_page) {
+		devm_kfree(ionic->dev, phc);
+		return;
+	}
 
 	phc->lif = lif;
 
@@ -610,7 +658,8 @@ void ionic_lif_alloc_phc(struct ionic_lif *lif)
 		dev_err(lif->ionic->dev,
 			"Invalid device PHC mask multiplier %u, disabling HW timestamp support\n",
 			phc->cc.mult);
-		devm_kfree(lif->ionic->dev, phc);
+		free_page((unsigned long)phc->state_page);
+		devm_kfree(ionic->dev, phc);
 		lif->phc = NULL;
 		return;
 	}
@@ -693,6 +742,10 @@ void ionic_lif_alloc_phc(struct ionic_lif *lif)
 	 */
 	phc->ptp_info.max_adj = NORMAL_PPB;
 
+	phc->state_page->mask = phc->cc.mask;
+	phc->state_page->shift = phc->cc.shift;
+	ionic_phc_state_page_update(phc);
+
 	lif->phc = phc;
 }
 
@@ -703,6 +756,7 @@ void ionic_lif_free_phc(struct ionic_lif *lif)
 
 	mutex_destroy(&lif->phc->config_lock);
 
+	free_page((unsigned long)lif->phc->state_page);
 	devm_kfree(lif->ionic->dev, lif->phc);
 	lif->phc = NULL;
 }

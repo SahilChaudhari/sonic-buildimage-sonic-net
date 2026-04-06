@@ -24,6 +24,7 @@
 #include <linux/pm_runtime.h>
 #include <linux/slab.h>
 #include <linux/mm.h>
+#include <linux/version.h>
 
 #include <linux/of.h>
 #include <linux/of_platform.h>
@@ -233,6 +234,15 @@ int mnet_uio_pdrv_genirq_remove(struct platform_device *pdev)
 
 	return 0;
 }
+
+#if (KERNEL_VERSION(5, 18, 0) <= LINUX_VERSION_CODE)
+static void uio_pdrv_genirq_remove(struct platform_device *pdev)
+{
+	mnet_uio_pdrv_genirq_remove(pdev);
+}
+#else
+#define uio_pdrv_genirq_remove mnet_uio_pdrv_genirq_remove
+#endif
 
 #if 0
 static int uio_pdrv_genirq_runtime_nop(struct device *dev)

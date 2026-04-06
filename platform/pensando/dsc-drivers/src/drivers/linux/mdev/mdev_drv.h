@@ -43,5 +43,7 @@ struct mdev_create_req {
 #define MDEV_CREATE_MNET 	_IOWR('Q', 11, struct mdev_create_req)
 #define MDEV_DESTROY		_IOW('Q',  12, const char*)
 #define MDEV_CREATE_MCRYPT 	_IOWR('Q', 13, struct mdev_create_req)
+#define MDEV_CREATE_GVE		_IOWR('Q', 14, struct mdev_create_req)
+#define MDEV_CREATE_GVE_LAN	_IOWR('Q', 15, struct mdev_create_req)
 
 #endif /* _MDEV_DRV_H */

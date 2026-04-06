@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: Copyright (C) 2024 Advanced Micro Devices, Inc.
+---
+- parallel:
+  - test: test_blocking
+    n_req: "random_limit:1000"
+    req_seed: 1
+    rsp_seed: 2
+    tgt_ep: 42
+
+  - test: test_blocking
+    n_req: "random_limit:1000"
+    max_delay: 300
+    req_seed: 100
+    rsp_seed: 1000
+    tgt_ep: 43
+
+  - test: test_blocking
+    n_req: "random_limit:1000"
+    max_delay: 10000
+    tgt_ep: 44
+
+  - test: test_non_blocking
+    n_req: 5000
+    n_in_flight: 8
+    tgt_ep: 45
+
+# Bidirectional parallel test
+- parallel:
+  - test: test_blocking
+    n_req: 2500
+    tgt_ep: 42
+
+  - test: test_blocking
+    n_req: 2500
+    requester: false
+    tgt_ep: 43
+
+  - test: test_non_blocking
+    n_req: "random_limit:5000"
+    req_seed: 35
+    rsp_seed: 53
+    tgt_ep: 44
+
+  - test: test_non_blocking
+    n_req: "random_limit:10000"
+    requester: false
+    req_seed: 3200
+    rsp_seed: 470
+    tgt_ep: 45

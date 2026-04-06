@@ -1,0 +1,65 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: Copyright (C) 2024 Advanced Micro Devices, Inc.
+---
+# Remote responder tests
+- test: test_blocking
+  n_req: 10
+
+- test: test_blocking
+  n_req: "random_limit:1000"
+  max_delay: 1000
+
+- test: test_blocking
+  n_req: "random_limit:10000"
+  max_pld_len: 8
+  n_in_flight: 16
+
+- test: test_non_blocking
+  n_req: 1000
+  max_delay: 1000
+  n_in_flight: 5
+
+- test: test_non_blocking
+  n_req: 1000
+  max_delay: 100
+  max_pld_len: 100
+  n_in_flight: 4
+
+- test: test_non_blocking
+  n_req: "random_limit:250000"
+  min_delay: 10
+  max_delay: 500
+  min_pld_len: 256
+  max_pld_len: 512
+  n_in_flight: 8
+  req_seed: 27
+  rsp_seed: 781
+
+# Remote requester tests
+- test: test_blocking
+  n_req: 10
+  requester: false
+
+- test: test_blocking
+  n_req: "random_limit:1000"
+  max_delay: 1000
+  requester: false
+  req_seed: 131
+  rsp_seed: 82
+
+- test: test_non_blocking
+  n_req: 1000
+  max_delay: 1000
+  n_in_flight: 5
+  requester: false
+
+- test: test_non_blocking
+  n_req: "random_limit:250000"
+  min_delay: 10
+  max_delay: 500
+  min_pld_len: 256
+  max_pld_len: 1000
+  n_in_flight: 12
+  req_seed: 64
+  rsp_seed: 1091
+  requester: false

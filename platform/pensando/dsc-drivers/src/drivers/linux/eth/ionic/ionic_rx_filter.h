@@ -10,6 +10,7 @@ enum ionic_filter_state {
 	IONIC_FILTER_STATE_SYNCED,
 	IONIC_FILTER_STATE_NEW,
 	IONIC_FILTER_STATE_OLD,
+	IONIC_FILTER_STATE_REJECTED,
 };
 
 struct ionic_rx_filter {
