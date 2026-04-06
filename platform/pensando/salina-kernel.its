@@ -1,0 +1,52 @@
+/dts-v1/;
+
+/ {
+        description = "Pensando Salina-ASIC SONiC Firmware";
+        #address-cells = <1>;
+
+        images {
+                kernel {
+                        description = "Compressed Linux kernel";
+                        data = /incbin/("Image.gz");
+                        type = "kernel";
+                        arch = "arm64";
+                        os = "linux";
+                        compression = "gzip";
+                        load = <0x88000000>;
+                        entry = <0x88000000>;
+                        hash-1 {
+                                algo = "sha256";
+                        };
+                };
+                salina-asic-fdt {
+                        description = "Salina/ASIC Flattened Device Tree blob";
+                        data = /incbin/("salina-asic.dtb");
+                        type = "flat_dt";
+                        arch = "arm64";
+                        compression = "none";
+                        hash-1 {
+                                algo = "sha256";
+                        };
+                };
+                ramdisk {
+                        description = "Ramdisk (initrd)";
+                        data = /incbin/("initrd.img");
+                        type = "ramdisk";
+                        arch = "arm64";
+                        os = "linux";
+                        hash-1 {
+                                algo = "sha256";
+                        };
+                };
+        };
+
+        configurations {
+                default = "salina-asic";
+                salina-asic {
+                        description = "Pensando Salina DSC Firmware";
+                        kernel = "kernel";
+                        fdt = "salina-asic-fdt";
+                        ramdisk = "ramdisk";
+                };
+        };
+};

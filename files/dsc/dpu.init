@@ -162,7 +162,7 @@ function start_dpu()
     modprobe ionic_mnic
     modprobe mnet_uio_pdrv_genirq
     modprobe mdev
-    modprobe pciesvc
+    modprobe tawk_ipc
 
     mkdir -p $HOST_DIR/update
     mkdir -p $HOST_DIR/sysconfig/config0
@@ -197,6 +197,13 @@ function start_dpu()
     docker ps -a --format "{{.ID}}\t{{.Image}}" | grep "$IMAGE_NAME:$TAG" | awk '{print $1}' | xargs -I {} docker rm {}
 
     docker run -v $HOST_DIR/update:/update -v $HOST_DIR/sysconfig/config0:/sysconfig/config0 -v $HOST_DIR/sysconfig/config1:/sysconfig/config1 -v $HOST_DIR/obfl:/obfl  -v $HOST_DIR/data:/data -v $HOST_DIR/tmpfsshare:/tmp -v $HOST_DIR/runfs:/run -v $HOST_DIR/logfs:/var/log -v /sys:/sys $NIC_MOUNT --net=host --name=$CONTAINER_NAME --privileged $IMAGE_NAME:$TAG &
+    if [ -f /boot/first_boot ]; then
+        device="/usr/share/sonic/device"
+        platform=$(grep 'onie_platform=' /host/machine.conf | cut -d '=' -f 2)
+        echo "python3 -m pip install $device/$platform/sonic_platform-1.0-py3-none-any.whl"
+        python3 -m pip install $device/$platform/sonic_platform-1.0-py3-none-any.whl
+        rm /boot/first_boot
+    fi
 }
 
 case "$1" in

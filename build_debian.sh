@@ -745,18 +745,87 @@ if [[ $TARGET_BOOTLOADER == uboot ]]; then
         sudo LANG=C chroot $FILESYSTEM_ROOT mv /boot/u${INITRD_FILE} /boot/$INITRD_FILE
     elif [[ $CONFIGURED_ARCH == arm64 ]]; then
         if [[ $CONFIGURED_PLATFORM == pensando ]]; then
-            ## copy device tree file into boot (XXX: need to compile dtb from dts)
-            sudo cp -v $FILESYSTEM_ROOT/usr/lib/linux-image-${LINUX_KERNEL_VERSION}-sonic-${CONFIGURED_ARCH}/pensando/elba-asic-psci.dtb $FILESYSTEM_ROOT/boot/
-            sudo cp -v $FILESYSTEM_ROOT/usr/lib/linux-image-${LINUX_KERNEL_VERSION}-sonic-${CONFIGURED_ARCH}/pensando/elba-asic-psci-lipari.dtb $FILESYSTEM_ROOT/boot/
-            sudo cp -v $FILESYSTEM_ROOT/usr/lib/linux-image-${LINUX_KERNEL_VERSION}-sonic-${CONFIGURED_ARCH}/pensando/elba-asic-psci-mtfuji.dtb $FILESYSTEM_ROOT/boot/
-            sudo cp -v $PLATFORM_DIR/pensando/install_file $FILESYSTEM_ROOT/boot/
-            ## make kernel as gzip file
-            sudo LANG=C chroot $FILESYSTEM_ROOT gzip /boot/${KERNEL_FILE}
-            sudo LANG=C chroot $FILESYSTEM_ROOT mv /boot/${KERNEL_FILE}.gz /boot/${KERNEL_FILE}
-            ## Convert initrd image to u-boot format
-            sudo LANG=C chroot $FILESYSTEM_ROOT mkimage -A arm64 -O linux -T ramdisk -C gzip -d /boot/$INITRD_FILE /boot/u${INITRD_FILE}
-            ## Overwriting the initrd image with uInitrd
-            sudo LANG=C chroot $FILESYSTEM_ROOT mv /boot/u${INITRD_FILE} /boot/$INITRD_FILE
+            ## Pensando platform: Either Salina OR Elba (mutually exclusive)
+            ## Check which platform by looking for salina-asic.dtb
+            PENSANDO_DTB_PATH=$FILESYSTEM_ROOT/usr/lib/linux-image-${LINUX_KERNEL_VERSION}-sonic-${CONFIGURED_ARCH}/pensando
+
+            if [ -f ${PENSANDO_DTB_PATH}/salina-asic.dtb ]; then
+                ##############################################
+                ## SALINA PLATFORM (Leni)
+                ##############################################
+                echo '[INFO] Detected Salina platform'
+
+                ## Copy Salina DTB to boot
+                sudo cp -v ${PENSANDO_DTB_PATH}/salina-asic.dtb $FILESYSTEM_ROOT/boot/
+
+                ## Copy install_file
+                sudo cp -v $PLATFORM_DIR/pensando/install_file $FILESYSTEM_ROOT/boot/
+
+                ## Make kernel as gzip file
+                sudo LANG=C chroot $FILESYSTEM_ROOT gzip /boot/${KERNEL_FILE}
+                sudo LANG=C chroot $FILESYSTEM_ROOT mv /boot/${KERNEL_FILE}.gz /boot/${KERNEL_FILE}
+
+                ## Build Salina FIT image (.itb)
+                ## NOTE: This MUST be done BEFORE converting initrd to u-boot format
+                ## because FIT images need raw initrd (gzip cpio), not u-boot legacy format
+                if [ -f $PLATFORM_DIR/pensando/salina-kernel.its ]; then
+                    echo '[INFO] Building Salina FIT image (ITB)...'
+                    ## Copy the ITS file to boot directory
+                    sudo cp -v $PLATFORM_DIR/pensando/salina-kernel.its $FILESYSTEM_ROOT/boot/
+
+                    ## Create symlinks for the ITS file references in /boot
+                    ## The ITS expects: Image.gz, salina-asic.dtb, initrd.img
+                    pushd $FILESYSTEM_ROOT/boot
+
+                    ## Image.gz - vmlinuz is already gzipped
+                    sudo ln -sf ${KERNEL_FILE} Image.gz
+
+                    ## salina-asic.dtb - already copied above
+
+                    ## initrd.img - link to the RAW initrd file (before u-boot mkimage conversion)
+                    ## The raw initrd is what the kernel expects (gzip compressed cpio archive)
+                    sudo ln -sf ${INITRD_FILE} initrd.img
+
+                    popd
+
+                    ## Build the ITB file using the RAW initrd
+                    sudo LANG=C chroot $FILESYSTEM_ROOT mkimage -f /boot/salina-kernel.its /boot/salina-kernel.itb
+
+                    ## Clean up temporary symlinks
+                    sudo rm -f $FILESYSTEM_ROOT/boot/Image.gz
+                    sudo rm -f $FILESYSTEM_ROOT/boot/initrd.img
+
+                    echo '[INFO] Salina FIT image created: /boot/salina-kernel.itb'
+                else
+                    echo '[WARNING] salina-kernel.its not found, skipping ITB creation'
+                fi
+
+                ## Convert initrd image to u-boot format (for fallback/non-FIT boot methods)
+                # sudo LANG=C chroot $FILESYSTEM_ROOT mkimage -A arm64 -O linux -T ramdisk -C gzip -d /boot/$INITRD_FILE /boot/u${INITRD_FILE}
+                # sudo LANG=C chroot $FILESYSTEM_ROOT mv /boot/u${INITRD_FILE} /boot/$INITRD_FILE
+
+            else
+                ##############################################
+                ## ELBA PLATFORM (DSC, Smart NIC, Lipari, Mt Fuji)
+                ##############################################
+                echo '[INFO] Detected Elba platform'
+
+                ## Copy Elba DTBs to boot
+                sudo cp -v ${PENSANDO_DTB_PATH}/elba-asic-psci.dtb $FILESYSTEM_ROOT/boot/
+                sudo cp -v ${PENSANDO_DTB_PATH}/elba-asic-psci-lipari.dtb $FILESYSTEM_ROOT/boot/
+                sudo cp -v ${PENSANDO_DTB_PATH}/elba-asic-psci-mtfuji.dtb $FILESYSTEM_ROOT/boot/
+
+                ## Copy install_file
+                sudo cp -v $PLATFORM_DIR/pensando/install_file $FILESYSTEM_ROOT/boot/
+
+                ## Make kernel as gzip file
+                sudo LANG=C chroot $FILESYSTEM_ROOT gzip /boot/${KERNEL_FILE}
+                sudo LANG=C chroot $FILESYSTEM_ROOT mv /boot/${KERNEL_FILE}.gz /boot/${KERNEL_FILE}
+
+                ## Convert initrd image to u-boot format
+                sudo LANG=C chroot $FILESYSTEM_ROOT mkimage -A arm64 -O linux -T ramdisk -C gzip -d /boot/$INITRD_FILE /boot/u${INITRD_FILE}
+                sudo LANG=C chroot $FILESYSTEM_ROOT mv /boot/u${INITRD_FILE} /boot/$INITRD_FILE
+            fi
         else
             sudo cp -v $PLATFORM_DIR/$CONFIGURED_PLATFORM/sonic_fit.its $FILESYSTEM_ROOT/boot/
             sudo LANG=C chroot $FILESYSTEM_ROOT mkimage -f /boot/sonic_fit.its /boot/sonic_${CONFIGURED_ARCH}.fit
